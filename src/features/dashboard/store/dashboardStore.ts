@@ -28,6 +28,7 @@ interface DashboardStoreState {
   refreshInterval: DashboardRefreshInterval;
   isHydrated: boolean;
   refresh: () => Promise<void>;
+  recalculateCostEstimate: () => void;
   setRefreshInterval: (value: DashboardRefreshInterval) => void;
 }
 
@@ -73,6 +74,24 @@ function downsampleSeries<T>(items: T[], maxPoints: number): T[] {
     sampled.push(lastItem);
   }
 
+  return sampled;
+}
+
+let requestSeriesCacheKey = '';
+let requestSeriesCacheValue: Array<{ timestamp: string | number; count: number }> = [];
+
+function downsampleRequestSeries(
+  items: Array<{ timestamp: string | number; count: number }>,
+  maxPoints: number,
+): Array<{ timestamp: string | number; count: number }> {
+  const key = `${maxPoints}:${items.map((item) => `${item.timestamp}:${item.count}`).join('|')}`;
+  if (key === requestSeriesCacheKey) {
+    return requestSeriesCacheValue;
+  }
+
+  const sampled = downsampleSeries(items, maxPoints);
+  requestSeriesCacheKey = key;
+  requestSeriesCacheValue = sampled;
   return sampled;
 }
 
@@ -158,7 +177,7 @@ function toSnapshot(args: {
   }>;
 }): DashboardSnapshot {
   const pricing = usePricingStore.getState().pricing;
-  const sampledRequests24h = downsampleSeries(args.requests24h, MAX_REQUEST_POINTS);
+  const sampledRequests24h = downsampleRequestSeries(args.requests24h, MAX_REQUEST_POINTS);
   const now = Date.now();
   const normalizedRequests24h = sampledRequests24h
     .map((item, index, source) => {
@@ -238,6 +257,7 @@ function toSnapshot(args: {
 
 const DASHBOARD_COLORS = ['#264653', '#FFCAD4', '#2A9D8F', '#533326', '#CAFFF5', '#B23A48'];
 let inflightRefreshId = 0;
+let inflightRefreshPromise: Promise<void> | null = null;
 
 function createEmptyDashboardSnapshot(): DashboardSnapshot {
   const now = Date.now();
@@ -287,156 +307,196 @@ export const useDashboardStore = create<DashboardStoreState>()(
       isHydrated: false,
 
       refresh: async () => {
+        if (inflightRefreshPromise) {
+          return inflightRefreshPromise;
+        }
+
         const refreshId = ++inflightRefreshId;
-        set((state) => ({
-          isLoading: !state.hasLoadedOnce,
-          isRefreshing: true,
-          lastError: null,
-        }));
-
-        try {
-          const [health, todayRequests, volume24h, volume7d, tokenStats, latency, channelsResult, sessionsResult, usageResult, modelsResult, costHistoryResult] =
-            await Promise.allSettled([
-            getHealth(),
-            getRequestStats('today'),
-            getRequestStats('24h'),
-            getRequestStats('7d'),
-            getTokenStats('today'),
-            getLatencyStats('24h'),
-            getChannels(),
-            getSessionsSummary(),
-            getUsageSummary(),
-            getModels(),
-            getCostHistory(MAX_COST_HISTORY_DAYS),
-          ]);
-
-          if (health.status !== 'fulfilled') {
-            throw new Error('Core dashboard stats are unavailable.');
-          }
-
-          if (refreshId !== inflightRefreshId) {
-            return;
-          }
-
-          const fallbackRequestPoints = Array.from({ length: 24 }, (_, index) => ({
-            timestamp: new Date(Date.now() - (23 - index) * 60 * 60 * 1000).toISOString(),
-            count: 0,
-          }));
-
-          const todayRequestsValue =
-            todayRequests.status === 'fulfilled'
-              ? todayRequests.value
-              : {
-                  period: 'today',
-                  total: 0,
-                  trend: { direction: 'flat' as const, percentage: 0 },
-                  points: fallbackRequestPoints,
-                };
-
-          const volume24hValue =
-            volume24h.status === 'fulfilled'
-              ? volume24h.value
-              : {
-                  period: '24h',
-                  total: 0,
-                  trend: { direction: 'flat' as const, percentage: 0 },
-                  points: fallbackRequestPoints,
-                };
-          const volume7dValue =
-            volume7d.status === 'fulfilled'
-              ? volume7d.value
-              : {
-                  period: '7d',
-                  total: volume24hValue.total,
-                  trend: volume24hValue.trend,
-                  points: volume24hValue.points,
-                };
-          const requestSeriesValue =
-            volume7dValue.points.length > volume24hValue.points.length ? volume7dValue : volume24hValue;
-
-          const tokenStatsValue =
-            tokenStats.status === 'fulfilled'
-              ? tokenStats.value
-              : {
-                  total: 0,
-                  byModel: [] as Array<{ model: string; tokens: number }>,
-                };
-
-          const knownModelIds =
-            modelsResult.status === 'fulfilled'
-              ? new Set(modelsResult.value.models.map((item) => item.id.toLowerCase()))
-              : null;
-          const normalizedByModel = tokenStatsValue.byModel.filter(
-            (item) => item.model.trim().length > 0 && Number.isFinite(item.tokens),
-          );
-          const filteredByModel =
-            knownModelIds && knownModelIds.size > 0
-              ? normalizedByModel.filter((item) => knownModelIds.has(item.model.toLowerCase()))
-              : normalizedByModel;
-          const finalByModel = filteredByModel.length > 0 ? filteredByModel : normalizedByModel;
-          const totalTokensFromModels = finalByModel.reduce((sum, item) => sum + item.tokens, 0);
-
-          const latencyValue =
-            latency.status === 'fulfilled'
-              ? latency.value
-              : {
-                  p50: 0,
-                  p95: 0,
-                  p99: 0,
-                };
-
-          const now = Date.now();
-          const snapshot = toSnapshot({
-            uptimeSeconds: health.value.uptimeSeconds,
-            requestsToday: todayRequestsValue.total,
-            requests24h: requestSeriesValue.points,
-            requestsTrend: todayRequestsValue.trend,
-            tokensByModel: finalByModel,
-            totalTokens: totalTokensFromModels > 0 ? totalTokensFromModels : tokenStatsValue.total,
-            latency: latencyValue,
-            channels: channelsResult.status === 'fulfilled' ? channelsResult.value.channels : [],
-            sessions: sessionsResult.status === 'fulfilled' ? sessionsResult.value.sessions : [],
-            usageProviders: usageResult.status === 'fulfilled' ? usageResult.value.providers : [],
-          });
-          const gatewayCostHistory =
-            costHistoryResult.status === 'fulfilled' && Array.isArray(costHistoryResult.value) && costHistoryResult.value.length > 0
-              ? toCostHistoryRecord(
-                  costHistoryResult.value.map((item) => ({
-                    date: item.date,
-                    tokens: Math.max(0, Math.floor(item.tokens)),
-                    cost: Math.max(0, Number(item.cost)),
-                    requests: Math.max(0, Math.floor(item.requests)),
-                    updatedAt: now,
-                  })),
-                )
-              : null;
-
+        const refreshPromise = (async (): Promise<void> => {
           set((state) => ({
-            snapshot,
-            costHistory: withUpdatedCostHistory(gatewayCostHistory ?? state.costHistory, {
-              tokens: snapshot.cards.tokenUsageToday,
-              cost: snapshot.cards.estimatedCostToday,
-              requests: snapshot.cards.requestsToday,
-              now,
-            }),
-            costHistorySource: gatewayCostHistory ? 'gateway' : 'local',
-            isLoading: false,
-            isRefreshing: false,
-            hasLoadedOnce: true,
+            isLoading: !state.hasLoadedOnce,
+            isRefreshing: true,
             lastError: null,
           }));
-        } catch (error: unknown) {
-          if (refreshId !== inflightRefreshId) {
-            return;
-          }
 
-          set({
-            isLoading: false,
-            isRefreshing: false,
-            hasLoadedOnce: true,
-            lastError: error instanceof Error ? error.message : 'Failed to refresh dashboard',
-          });
-        }
+          try {
+            const [health, todayRequests, volume24h, volume7d, tokenStats, latency, channelsResult, sessionsResult, usageResult, modelsResult, costHistoryResult] =
+              await Promise.allSettled([
+                getHealth(),
+                getRequestStats('today'),
+                getRequestStats('24h'),
+                getRequestStats('7d'),
+                getTokenStats('today'),
+                getLatencyStats('24h'),
+                getChannels(),
+                getSessionsSummary(),
+                getUsageSummary(),
+                getModels(),
+                getCostHistory(MAX_COST_HISTORY_DAYS),
+              ]);
+
+            if (health.status !== 'fulfilled') {
+              throw new Error('Core dashboard stats are unavailable.');
+            }
+
+            if (refreshId !== inflightRefreshId) {
+              return;
+            }
+
+            const fallbackRequestPoints = Array.from({ length: 24 }, (_, index) => ({
+              timestamp: new Date(Date.now() - (23 - index) * 60 * 60 * 1000).toISOString(),
+              count: 0,
+            }));
+
+            const todayRequestsValue =
+              todayRequests.status === 'fulfilled'
+                ? todayRequests.value
+                : {
+                    period: 'today',
+                    total: 0,
+                    trend: { direction: 'flat' as const, percentage: 0 },
+                    points: fallbackRequestPoints,
+                  };
+
+            const volume24hValue =
+              volume24h.status === 'fulfilled'
+                ? volume24h.value
+                : {
+                    period: '24h',
+                    total: 0,
+                    trend: { direction: 'flat' as const, percentage: 0 },
+                    points: fallbackRequestPoints,
+                  };
+            const volume7dValue =
+              volume7d.status === 'fulfilled'
+                ? volume7d.value
+                : {
+                    period: '7d',
+                    total: volume24hValue.total,
+                    trend: volume24hValue.trend,
+                    points: volume24hValue.points,
+                  };
+            const requestSeriesValue =
+              volume7dValue.points.length > volume24hValue.points.length ? volume7dValue : volume24hValue;
+
+            const tokenStatsValue =
+              tokenStats.status === 'fulfilled'
+                ? tokenStats.value
+                : {
+                    total: 0,
+                    byModel: [] as Array<{ model: string; tokens: number }>,
+                  };
+
+            const knownModelIds =
+              modelsResult.status === 'fulfilled'
+                ? new Set(modelsResult.value.models.map((item) => item.id.toLowerCase()))
+                : null;
+            const normalizedByModel = tokenStatsValue.byModel.filter(
+              (item) => item.model.trim().length > 0 && Number.isFinite(item.tokens),
+            );
+            const filteredByModel =
+              knownModelIds && knownModelIds.size > 0
+                ? normalizedByModel.filter((item) => knownModelIds.has(item.model.toLowerCase()))
+                : normalizedByModel;
+            const finalByModel = filteredByModel.length > 0 ? filteredByModel : normalizedByModel;
+            const totalTokensFromModels = finalByModel.reduce((sum, item) => sum + item.tokens, 0);
+
+            const latencyValue =
+              latency.status === 'fulfilled'
+                ? latency.value
+                : {
+                    p50: 0,
+                    p95: 0,
+                    p99: 0,
+                  };
+
+            const now = Date.now();
+            const snapshot = toSnapshot({
+              uptimeSeconds: health.value.uptimeSeconds,
+              requestsToday: todayRequestsValue.total,
+              requests24h: requestSeriesValue.points,
+              requestsTrend: todayRequestsValue.trend,
+              tokensByModel: finalByModel,
+              totalTokens: totalTokensFromModels > 0 ? totalTokensFromModels : tokenStatsValue.total,
+              latency: latencyValue,
+              channels: channelsResult.status === 'fulfilled' ? channelsResult.value.channels : [],
+              sessions: sessionsResult.status === 'fulfilled' ? sessionsResult.value.sessions : [],
+              usageProviders: usageResult.status === 'fulfilled' ? usageResult.value.providers : [],
+            });
+            const gatewayCostHistory =
+              costHistoryResult.status === 'fulfilled' && Array.isArray(costHistoryResult.value) && costHistoryResult.value.length > 0
+                ? toCostHistoryRecord(
+                    costHistoryResult.value.map((item) => ({
+                      date: item.date,
+                      tokens: Math.max(0, Math.floor(item.tokens)),
+                      cost: Math.max(0, Number(item.cost)),
+                      requests: Math.max(0, Math.floor(item.requests)),
+                      updatedAt: now,
+                    })),
+                  )
+                : null;
+
+            set((state) => ({
+              snapshot,
+              costHistory: withUpdatedCostHistory(gatewayCostHistory ?? state.costHistory, {
+                tokens: snapshot.cards.tokenUsageToday,
+                cost: snapshot.cards.estimatedCostToday,
+                requests: snapshot.cards.requestsToday,
+                now,
+              }),
+              costHistorySource: gatewayCostHistory ? 'gateway' : 'local',
+              isLoading: false,
+              isRefreshing: false,
+              hasLoadedOnce: true,
+              lastError: null,
+            }));
+          } catch (error: unknown) {
+            if (refreshId !== inflightRefreshId) {
+              return;
+            }
+
+            set({
+              isLoading: false,
+              isRefreshing: false,
+              hasLoadedOnce: true,
+              lastError: error instanceof Error ? error.message : 'Failed to refresh dashboard',
+            });
+          } finally {
+            inflightRefreshPromise = null;
+          }
+        })();
+
+        inflightRefreshPromise = refreshPromise;
+        return refreshPromise;
+      },
+
+      recalculateCostEstimate: () => {
+        set((state) => {
+          const estimatedCostToday = estimateCostFromTokens(
+            state.snapshot.tokenUsageByModel.map((item) => ({
+              model: item.model,
+              tokens: item.tokens,
+            })),
+            usePricingStore.getState().pricing,
+          );
+          const now = Date.now();
+
+          return {
+            snapshot: {
+              ...state.snapshot,
+              cards: {
+                ...state.snapshot.cards,
+                estimatedCostToday,
+              },
+            },
+            costHistory: withUpdatedCostHistory(state.costHistory, {
+              tokens: state.snapshot.cards.tokenUsageToday,
+              cost: estimatedCostToday,
+              requests: state.snapshot.cards.requestsToday,
+              now,
+            }),
+          };
+        });
       },
 
       setRefreshInterval: (value) => {

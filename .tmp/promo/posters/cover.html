@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=1242, initial-scale=1" />
+    <link rel="stylesheet" href="./shared.css" />
+    <title>ClawLink Cover</title>
+    <style>
+      .cover {
+        background:
+          radial-gradient(circle at 12% 14%, rgba(185, 214, 205, 0.72), transparent 24%),
+          radial-gradient(circle at 86% 18%, rgba(255, 255, 255, 0.9), transparent 20%),
+          linear-gradient(180deg, #f3eee6 0%, #f6f1ea 52%, #eef3f0 100%);
+      }
+
+      .wrap {
+        position: relative;
+        width: 100%;
+        height: 100%;
+        padding: 56px 46px 42px;
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 18px;
+      }
+
+      .brand-icon {
+        width: 84px;
+        height: 84px;
+        border-radius: 24px;
+        overflow: hidden;
+        box-shadow: 0 14px 30px rgba(14, 41, 49, 0.12);
+      }
+
+      .brand-icon img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        display: block;
+      }
+
+      .brand-copy strong {
+        display: block;
+        font-size: 34px;
+        font-weight: 900;
+        letter-spacing: -0.03em;
+      }
+
+      .brand-copy span {
+        display: block;
+        margin-top: 6px;
+        font-size: 20px;
+        color: #5a7079;
+        font-weight: 700;
+      }
+
+      .copy {
+        position: relative;
+        z-index: 2;
+        max-width: 760px;
+      }
+
+      .title {
+        margin: 18px 0 0;
+        font-size: 128px;
+        line-height: 0.9;
+        letter-spacing: -0.065em;
+        font-weight: 950;
+        color: #17303a;
+      }
+
+      .title .line {
+        display: block;
+      }
+
+      .title .line.openclaw {
+        font-size: 154px;
+        line-height: 0.8;
+      }
+
+      .title .line.cn {
+        margin-top: 6px;
+      }
+
+      .tag {
+        margin-top: 24px;
+        display: inline-flex;
+        align-items: center;
+        padding: 14px 24px;
+        border-radius: 999px;
+        background: #244b59;
+        color: #fff7ef;
+        font-size: 26px;
+        font-weight: 900;
+        letter-spacing: 0.01em;
+      }
+
+      .sub {
+        margin-top: 22px;
+        font-size: 30px;
+        line-height: 1.35;
+        font-weight: 800;
+        color: #5b7078;
+        max-width: 660px;
+      }
+
+      .glow {
+        position: absolute;
+        right: -18px;
+        top: 256px;
+        width: 570px;
+        height: 980px;
+        background: radial-gradient(circle, rgba(36, 75, 89, 0.16), transparent 70%);
+        filter: blur(20px);
+      }
+
+      .phone {
+        position: absolute;
+        right: 18px;
+        top: 232px;
+        width: 474px;
+        height: 966px;
+        border-radius: 44px;
+        overflow: hidden;
+        border: 14px solid rgba(255, 255, 255, 0.78);
+        background: rgba(255, 255, 255, 0.82);
+        box-shadow: 0 26px 60px rgba(14, 41, 49, 0.16);
+        transform: rotate(6.5deg);
+        z-index: 1;
+      }
+
+      .phone img {
+        display: block;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="poster cover">
+      <div class="noise"></div>
+      <div class="wrap">
+        <div class="glow"></div>
+        <section class="copy">
+          <div class="brand">
+            <div class="brand-icon"><img src="../../../assets/icon.png" alt="ClawLink app icon" /></div>
+            <div class="brand-copy">
+              <strong>ClawLink</strong>
+              <span>OpenClaw Gateway Remote</span>
+            </div>
+          </div>
+
+          <h1 class="title">
+            <span class="line openclaw">OpenClaw</span>
+            <span class="line cn">先别做</span>
+            <span class="line cn">手机版</span>
+            <span class="line cn">先做遥控器</span>
+          </h1>
+
+          <div class="tag">看状态 / 切 Agent / 盯日志 / 继续处理</div>
+          <div class="sub">
+            用灵动岛监控你的龙虾。<br />
+            实时看今天烧了多少 token。
+          </div>
+        </section>
+
+        <div class="phone"><img src="../dashboard.png" alt="Dashboard screenshot" /></div>
+      </div>
+    </main>
+  </body>
+</html>

@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=1600, initial-scale=1" />
+    <link rel="stylesheet" href="./surfaces.css" />
+    <title>ClawLink System Surfaces Sheet</title>
+    <style>
+      html,
+      body {
+        width: 1600px;
+        height: 1200px;
+      }
+
+      .sheet {
+        width: 1600px;
+        height: 1200px;
+        padding: 44px;
+      }
+
+      .grid {
+        position: relative;
+        z-index: 1;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 28px;
+        margin-top: 28px;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="artboard sheet">
+      <div class="noise"></div>
+      <section class="brand-mini">
+        <div class="icon"><img src="../../../assets/icon.png" alt="ClawLink icon" /></div>
+        <div>
+          <strong>ClawLink System Surfaces</strong>
+          <span>Dynamic Island / Live Activity / Widgets</span>
+        </div>
+      </section>
+
+      <section class="grid">
+        <article class="surface-card">
+          <div class="surface-label">Dynamic Island</div>
+          <div class="surface-copy">展开态 + 紧凑态</div>
+          <div class="demo-phone-top" style="margin-top: 18px">
+            <div class="demo-notch"></div>
+            <div class="demo-island-expanded">
+              <div class="island-top">
+                <div class="state-pill"><div class="dot"></div>ONLINE</div>
+                <div class="island-center">
+                  <strong>Codex Ops</strong>
+                  <span>监测到 Agent 进入 error 状态，建议先看 Monitor。</span>
+                </div>
+                <div class="island-side">
+                  <strong>$13.72</strong>
+                  <span>now</span>
+                </div>
+              </div>
+              <div class="island-actions">
+                <div class="pill">Chat</div>
+                <div class="pill">Monitor</div>
+                <div class="pill" style="background: rgba(200, 87, 98, 0.14); color: var(--warn)">⚠ 1 Agent Error</div>
+              </div>
+            </div>
+            <div class="demo-island-compact">
+              <div class="left"><div class="dot"></div>ClawLink</div>
+              <div class="right">$13.72</div>
+            </div>
+          </div>
+        </article>
+
+        <article class="surface-card">
+          <div class="surface-label">Live Activity</div>
+          <div class="surface-copy">锁屏实时活动</div>
+          <div class="live-activity" style="margin-top: 18px">
+            <div class="error-banner">⚠ 1 Agent Error</div>
+            <div class="la-header">
+              <strong>Codex Ops</strong>
+              <div class="state-pill"><div class="dot"></div>ONLINE</div>
+            </div>
+            <div class="la-task">监测到 Agent 进入 error 状态，建议先看 Monitor，再决定要不要重启。</div>
+            <div class="la-metrics">
+              <div class="la-chip">Sessions 3</div>
+              <div class="la-chip">Channels 2</div>
+              <div class="la-chip">Cost $13.72</div>
+            </div>
+            <div class="la-footer">
+              <div class="la-row"><span>同步进度</span><span>7/9 synced</span></div>
+              <div class="progress"><div></div></div>
+              <div class="la-row"><span>$13.72</span><span>now</span></div>
+            </div>
+          </div>
+        </article>
+
+        <article class="surface-card">
+          <div class="surface-label">Widget</div>
+          <div class="surface-copy">总览小组件</div>
+          <div class="widget-medium" style="margin-top: 18px">
+            <div class="widget-head">
+              <span>ClawLink</span>
+              <div class="online-dot"></div>
+            </div>
+            <strong>Codex Ops: 监测到 Agent 进入 error 状态</strong>
+            <p>3 sessions · 2 channels · 2 queued</p>
+            <div class="widget-metrics">
+              <div class="widget-metric"><span>Sessions</span><strong>3</strong></div>
+              <div class="widget-metric"><span>Channels</span><strong>2</strong></div>
+              <div class="widget-metric"><span>Queue</span><strong>2</strong></div>
+            </div>
+            <div class="trend-row">⚠ 1 Agent Error · Cost $13.72</div>
+          </div>
+        </article>
+
+        <article class="surface-card">
+          <div class="surface-label">Cost Widget</div>
+          <div class="surface-copy">成本小组件</div>
+          <div class="widget-small" style="margin-top: 18px; max-width: 360px">
+            <div class="widget-head">
+              <span>Cost Today</span>
+              <div class="online-dot"></div>
+            </div>
+            <div class="small-price">$13.72</div>
+            <div class="trend-row">↘ -8% vs yesterday</div>
+            <div class="small-bottom">
+              <div class="metric"><span>Requests</span><strong>1.2K</strong></div>
+              <div class="metric"><span>Tokens</span><strong>13.1M</strong></div>
+            </div>
+          </div>
+        </article>
+      </section>
+    </main>
+  </body>
+</html>

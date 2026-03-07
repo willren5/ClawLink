@@ -29,6 +29,8 @@ const diagnosticsExport_1 = require("./diagnosticsExport");
             dynamicIslandEnabled: true,
             widgetEnabled: true,
             dashboardSectionOrder: ['volume'],
+            pricingCurrency: 'USD',
+            dailyBudget: 20,
         },
         connection: {
             status: 'connected',

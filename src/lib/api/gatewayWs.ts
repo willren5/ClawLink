@@ -1,4 +1,5 @@
 import { useConnectionStore } from '../../features/connection/store/connectionStore';
+import { APP_ERROR_CODES, ClawLinkError, getAppErrorCode, inferAppErrorCode } from '../errors/appError';
 import { resolveGatewayProfileAuth, toGatewayTokenState } from './gatewayAuth';
 
 export const WS_PROTOCOL_VERSION = 3;
@@ -97,24 +98,28 @@ function buildConnectPayload(
 }
 
 function shouldRetryConnectProfile(error: unknown): boolean {
-  const lowered = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+  const code = getAppErrorCode(error);
   return (
-    lowered.includes('scope') ||
-    lowered.includes('role') ||
-    lowered.includes('permission') ||
-    lowered.includes('forbidden') ||
-    lowered.includes('unauthorized') ||
-    lowered.includes('denied') ||
-    lowered.includes('invalid') ||
-    lowered.includes('schema') ||
-    lowered.includes('connect')
+    code === APP_ERROR_CODES.AUTH_EXPIRED ||
+    code === APP_ERROR_CODES.AUTH_FORBIDDEN ||
+    code === APP_ERROR_CODES.GATEWAY_ORIGIN_NOT_ALLOWED ||
+    code === APP_ERROR_CODES.REQUEST_INVALID ||
+    code === APP_ERROR_CODES.RESPONSE_SCHEMA_INVALID ||
+    code === APP_ERROR_CODES.WS_CONNECT_FAILED
   );
 }
 
-function toErrorMessage(method: string, frame: GatewayWsFrame): string {
+function toGatewayWsError(method: string, frame: GatewayWsFrame): ClawLinkError {
   const code = frame.error?.code ? `${frame.error.code}: ` : '';
   const message = frame.error?.message ?? 'gateway request failed';
-  return `${method} -> ${code}${message}`;
+  return new ClawLinkError({
+    code: inferAppErrorCode({
+      message,
+      sourceCode: frame.error?.code,
+    }),
+    message: `${method} -> ${code}${message}`,
+    sourceCode: frame.error?.code,
+  });
 }
 
 export async function requestGatewayWs(
@@ -165,7 +170,12 @@ export async function requestGatewayWs(
       clearTimeout(handshakeTimer);
       for (const [, entry] of pending) {
         clearTimeout(entry.timeoutId);
-        entry.rejectPending(new Error('gateway websocket request interrupted'));
+        entry.rejectPending(
+          new ClawLinkError({
+            code: APP_ERROR_CODES.WS_CONNECT_FAILED,
+            message: 'gateway websocket request interrupted',
+          }),
+        );
       }
       pending.clear();
 
@@ -179,7 +189,13 @@ export async function requestGatewayWs(
     };
 
     const fail = (error: unknown): void => {
-      const normalized = error instanceof Error ? error : new Error(String(error));
+      const normalized =
+        error instanceof Error
+          ? error
+          : new ClawLinkError({
+              code: APP_ERROR_CODES.UNKNOWN,
+              message: String(error),
+            });
       settle(() => {
         reject(normalized);
       });
@@ -187,7 +203,12 @@ export async function requestGatewayWs(
 
     const sendRequest = (methodName: string, payloadParams: Record<string, unknown>): Promise<unknown> => {
       if (ws.readyState !== WebSocket.OPEN) {
-        return Promise.reject(new Error('gateway websocket is not connected'));
+        return Promise.reject(
+          new ClawLinkError({
+            code: APP_ERROR_CODES.WS_CONNECT_FAILED,
+            message: 'gateway websocket is not connected',
+          }),
+        );
       }
 
       reqCounter += 1;
@@ -196,7 +217,12 @@ export async function requestGatewayWs(
       return new Promise<unknown>((resolvePending, rejectPending) => {
         const timeoutId = setTimeout(() => {
           pending.delete(id);
-          rejectPending(new Error(`${methodName} timeout (${timeoutMs}ms)`));
+          rejectPending(
+            new ClawLinkError({
+              code: APP_ERROR_CODES.TIMEOUT,
+              message: `${methodName} timeout (${timeoutMs}ms)`,
+            }),
+          );
         }, timeoutMs);
 
         pending.set(id, {
@@ -218,7 +244,12 @@ export async function requestGatewayWs(
     };
 
     const handshakeTimer = setTimeout(() => {
-      fail(new Error(`gateway websocket handshake timeout (${timeoutMs}ms)`));
+      fail(
+        new ClawLinkError({
+          code: APP_ERROR_CODES.TIMEOUT,
+          message: `gateway websocket handshake timeout (${timeoutMs}ms)`,
+        }),
+      );
     }, timeoutMs);
 
     ws.onmessage = (event: MessageEvent) => {
@@ -281,12 +312,17 @@ export async function requestGatewayWs(
       if (frame.ok) {
         pendingEntry.resolvePending(frame.payload);
       } else {
-        pendingEntry.rejectPending(new Error(toErrorMessage(pendingEntry.methodName, frame)));
+        pendingEntry.rejectPending(toGatewayWsError(pendingEntry.methodName, frame));
       }
     };
 
     ws.onerror = () => {
-      fail(new Error('gateway websocket connection failed'));
+      fail(
+        new ClawLinkError({
+          code: APP_ERROR_CODES.WS_CONNECT_FAILED,
+          message: 'gateway websocket connection failed',
+        }),
+      );
     };
 
     ws.onclose = (event: CloseEvent) => {
@@ -295,7 +331,16 @@ export async function requestGatewayWs(
       }
 
       const reason = event.reason?.trim() || 'gateway websocket closed unexpectedly';
-      fail(new Error(reason));
+      fail(
+        new ClawLinkError({
+          code: inferAppErrorCode({
+            message: reason,
+            sourceCode: `${event.code}`,
+          }),
+          message: reason,
+          sourceCode: `${event.code}`,
+        }),
+      );
     };
   });
 }

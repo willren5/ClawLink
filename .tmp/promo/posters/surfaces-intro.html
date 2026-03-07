@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=1242, initial-scale=1" />
+    <link rel="stylesheet" href="./surfaces.css" />
+    <title>ClawLink Surfaces Intro</title>
+    <style>
+      html,
+      body {
+        width: 1242px;
+        height: 1660px;
+      }
+
+      .poster {
+        width: 1242px;
+        height: 1660px;
+        padding: 56px 44px;
+      }
+
+      .title {
+        margin: 18px 0 0;
+        font-size: 86px;
+        line-height: 0.94;
+        letter-spacing: -0.05em;
+        font-weight: 950;
+      }
+
+      .subhead {
+        margin-top: 24px;
+        max-width: 920px;
+        font-size: 30px;
+        line-height: 1.45;
+        color: var(--ink-soft);
+        font-weight: 800;
+      }
+
+      .grid {
+        position: relative;
+        z-index: 1;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 24px;
+        margin-top: 34px;
+      }
+
+      .grid .surface-card:nth-child(1),
+      .grid .surface-card:nth-child(2) {
+        min-height: 430px;
+      }
+
+      .grid .surface-card:nth-child(3),
+      .grid .surface-card:nth-child(4) {
+        min-height: 380px;
+      }
+
+      .compact-copy {
+        margin-top: 10px;
+        font-size: 20px;
+        line-height: 1.42;
+        color: var(--ink-soft);
+        font-weight: 700;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="artboard poster">
+      <div class="noise"></div>
+      <section class="brand-mini">
+        <div class="icon"><img src="../../../assets/icon.png" alt="ClawLink icon" /></div>
+        <div>
+          <strong>ClawLink</strong>
+          <span>OpenClaw Gateway Remote</span>
+        </div>
+      </section>
+
+      <div class="section-chip" style="margin-top: 26px">系统表面</div>
+      <h1 class="title">不打开 App，<br />也能盯着你的龙虾</h1>
+      <div class="subhead">
+        灵动岛盯在线状态和今天花了多少 token。实时活动把同步进度、异常 Agent 和当前任务顶到锁屏。小组件负责一眼看全局。
+      </div>
+
+      <section class="grid">
+        <article class="surface-card">
+          <div class="surface-label">灵动岛</div>
+          <div class="surface-title">抬头一眼就知道<br />龙虾还活着没</div>
+          <div class="demo-phone-top" style="margin-top: 16px; min-height: 238px">
+            <div class="demo-notch"></div>
+            <div class="demo-island-expanded" style="width: 470px; min-height: 126px; top: 42px">
+              <div class="island-top">
+                <div class="state-pill"><div class="dot"></div>ONLINE</div>
+                <div class="island-center">
+                  <strong>Codex Ops</strong>
+                  <span>1 个 Agent 异常，建议先看 Monitor。</span>
+                </div>
+                <div class="island-side">
+                  <strong>$13.72</strong>
+                  <span>now</span>
+                </div>
+              </div>
+              <div class="island-actions" style="margin-top: 12px">
+                <div class="pill">Chat</div>
+                <div class="pill">Monitor</div>
+              </div>
+            </div>
+            <div class="demo-island-compact" style="margin-top: 182px; width: 260px">
+              <div class="left"><div class="dot"></div>ClawLink</div>
+              <div class="right">$13.72</div>
+            </div>
+          </div>
+        </article>
+
+        <article class="surface-card">
+          <div class="surface-label">实时活动</div>
+          <div class="surface-title">锁屏直接看同步、成本和异常</div>
+          <div class="live-activity" style="margin-top: 16px">
+            <div class="error-banner">⚠ 1 Agent Error</div>
+            <div class="la-header">
+              <strong>Codex Ops</strong>
+              <div class="state-pill"><div class="dot"></div>ONLINE</div>
+            </div>
+            <div class="la-task">监测到 Agent 进入 error 状态，建议先看 Monitor，再决定要不要重启。</div>
+            <div class="la-metrics">
+              <div class="la-chip">Sessions 3</div>
+              <div class="la-chip">Channels 2</div>
+              <div class="la-chip">Cost $13.72</div>
+            </div>
+            <div class="la-footer">
+              <div class="la-row"><span>同步进度</span><span>7/9 synced</span></div>
+              <div class="progress"><div></div></div>
+              <div class="la-row"><span>$13.72</span><span>now</span></div>
+            </div>
+          </div>
+        </article>
+
+        <article class="surface-card">
+          <div class="surface-label">总览小组件</div>
+          <div class="surface-title">会话、频道、队列一格看全</div>
+          <div class="widget-medium" style="margin-top: 16px">
+            <div class="widget-head">
+              <span>ClawLink</span>
+              <div class="online-dot"></div>
+            </div>
+            <strong>Codex Ops: 监测到 Agent 进入 error 状态</strong>
+            <p>3 sessions · 2 channels · 2 queued</p>
+            <div class="widget-metrics">
+              <div class="widget-metric"><span>Sessions</span><strong>3</strong></div>
+              <div class="widget-metric"><span>Channels</span><strong>2</strong></div>
+              <div class="widget-metric"><span>Queue</span><strong>2</strong></div>
+            </div>
+            <div class="trend-row">⚠ 1 Agent Error · Cost $13.72</div>
+          </div>
+        </article>
+
+        <article class="surface-card">
+          <div class="surface-label">成本小组件</div>
+          <div class="surface-title">今天烧了多少 token 一眼就有</div>
+          <div style="display: flex; gap: 18px; align-items: stretch; margin-top: 16px">
+            <div class="widget-small" style="width: 320px">
+              <div class="widget-head">
+                <span>Cost Today</span>
+                <div class="online-dot"></div>
+              </div>
+              <div class="small-price">$13.72</div>
+              <div class="trend-row">↘ -8% vs yesterday</div>
+              <div class="small-bottom">
+                <div class="metric"><span>Requests</span><strong>1.2K</strong></div>
+                <div class="metric"><span>Tokens</span><strong>13.1M</strong></div>
+              </div>
+            </div>
+            <div class="compact-copy">
+              用灵动岛监控你的龙虾。<br />
+              小组件直接告诉你今天到底烧了多少 token、跑了多少请求，不用先进 App 才知道。
+            </div>
+          </div>
+        </article>
+      </section>
+    </main>
+  </body>
+</html>

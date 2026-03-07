@@ -1,4 +1,5 @@
 import type { GatewayProfile } from './types';
+import { isHiddenDebugProfileEnabled } from '../../lib/features/featureFlags';
 
 export const HIDDEN_DEBUG_PROFILE_ID = 'gw_hidden_debug_user';
 export const HIDDEN_DEBUG_PROFILE_NAME = '__hidden_debug_user__';
@@ -30,6 +31,10 @@ export function getVisibleGatewayProfiles(profiles: GatewayProfile[]): GatewayPr
 }
 
 export function ensureHiddenDebugProfile(profiles: GatewayProfile[]): GatewayProfile[] {
+  if (!isHiddenDebugProfileEnabled()) {
+    return profiles.filter((profile) => !isHiddenDebugProfile(profile));
+  }
+
   const now = Date.now();
   const normalized = profiles.map((profile) => {
     if (!isHiddenDebugProfile(profile)) {

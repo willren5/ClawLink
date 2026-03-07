@@ -1,10 +1,12 @@
 import * as Notifications from 'expo-notifications';
 
-import { useAppPreferencesStore } from '../../settings/store/preferencesStore';
 import { resolveFocusFilterPolicy } from '../../system-surfaces/services/focusFilter';
 import { subscribeSnapshotChanges } from '../../system-surfaces/services/snapshotAggregator';
 import type { SystemSurfaceSnapshot } from '../../system-surfaces/types';
-import { useAlertStore, type AlertSeverity, type AlertType } from '../store/alertStore';
+import { defaultDeepLinkForAlert } from '../incidentDefinitions';
+import { useAlertStore } from '../store/alertStore';
+import type { AlertSeverity, AlertType } from '../types';
+import { buildDailyBudgetAlert, hasPublishedDailyBudgetAlert, markDailyBudgetAlertPublished } from './budgetAlerts';
 import {
   buildAlertNotificationContent,
   buildAlertStrings,
@@ -23,17 +25,20 @@ let stopMonitor: (() => void) | null = null;
 interface AlertPayload {
   type: AlertType;
   severity: AlertSeverity;
-  titleKey:
+  titleKey?:
     | 'notifications_alert_agent_error_title'
     | 'notifications_alert_disconnect_title'
     | 'notifications_alert_queue_title'
     | 'notifications_alert_error_transition_title';
-  bodyKey:
+  bodyKey?:
     | 'notifications_alert_agent_error_body'
     | 'notifications_alert_disconnect_body'
     | 'notifications_alert_queue_body'
     | 'notifications_alert_error_transition_body';
+  title?: string;
+  body?: string;
   dedupeKey: string;
+  dedupeMs?: number;
 }
 
 interface AlertEvaluatorState {
@@ -52,33 +57,47 @@ async function shouldPublishInFocusMode(): Promise<boolean> {
   }
 }
 
-function shouldEmit(state: AlertEvaluatorState, dedupeKey: string, now: number): boolean {
+function shouldEmit(state: AlertEvaluatorState, dedupeKey: string, now: number, dedupeMs = ALERT_DEDUPE_MS): boolean {
   const last = state.dedupeByCondition.get(dedupeKey);
-  if (typeof last === 'number' && now - last < ALERT_DEDUPE_MS) {
+  if (typeof last === 'number' && now - last < dedupeMs) {
     return false;
   }
   state.dedupeByCondition.set(dedupeKey, now);
   return true;
 }
 
-async function publishAlert(state: AlertEvaluatorState, payload: AlertPayload): Promise<void> {
+async function publishAlert(state: AlertEvaluatorState, payload: AlertPayload): Promise<boolean> {
   if (!(await shouldPublishInFocusMode())) {
-    return;
+    return false;
   }
 
   const now = Date.now();
-  if (!shouldEmit(state, payload.dedupeKey, now)) {
-    return;
+  if (useAlertStore.getState().isAlertSnoozed(payload.type, payload.dedupeKey, now)) {
+    return false;
+  }
+  if (!shouldEmit(state, payload.dedupeKey, now, payload.dedupeMs)) {
+    return false;
   }
 
   const language = getCurrentNotificationLanguage();
-  const { title, body } = buildAlertStrings(language, payload);
+  const { title, body } =
+    typeof payload.title === 'string' && typeof payload.body === 'string'
+      ? { title: payload.title, body: payload.body }
+      : buildAlertStrings(language, {
+          titleKey: payload.titleKey ?? 'notifications_alert_agent_error_title',
+          bodyKey: payload.bodyKey ?? 'notifications_alert_agent_error_body',
+        });
   const entry = useAlertStore.getState().addAlert({
     type: payload.type,
     severity: payload.severity,
     title,
     body,
+    dedupeKey: payload.dedupeKey,
+    deepLink: defaultDeepLinkForAlert(payload.type),
   });
+  if (!entry) {
+    return false;
+  }
   const content = buildAlertNotificationContent({
     alertId: entry.id,
     type: payload.type,
@@ -108,13 +127,14 @@ async function publishAlert(state: AlertEvaluatorState, payload: AlertPayload): 
 
   const granted = await ensureNotificationPermission();
   if (!granted) {
-    return;
+    return false;
   }
 
   await Notifications.scheduleNotificationAsync({
     content,
     trigger: null,
   });
+  return true;
 }
 
 async function evaluateSnapshot(state: AlertEvaluatorState): Promise<void> {
@@ -174,6 +194,21 @@ async function evaluateSnapshot(state: AlertEvaluatorState): Promise<void> {
     }
   } else {
     state.queueBacklogSince = null;
+  }
+
+  const budgetAlert = buildDailyBudgetAlert(snapshot.costToday, now);
+  if (budgetAlert && !hasPublishedDailyBudgetAlert(budgetAlert)) {
+    const published = await publishAlert(state, {
+      type: budgetAlert.type,
+      severity: budgetAlert.severity,
+      title: budgetAlert.title,
+      body: budgetAlert.body,
+      dedupeKey: `${budgetAlert.type}:${budgetAlert.dayKey}`,
+      dedupeMs: budgetAlert.dedupeMs,
+    });
+    if (published) {
+      markDailyBudgetAlertPublished(budgetAlert);
+    }
   }
 
   state.previousErrorCount = snapshot.errorCount;

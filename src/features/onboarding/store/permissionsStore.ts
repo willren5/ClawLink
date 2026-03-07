@@ -1,18 +1,28 @@
 import { getRecordingPermissionsAsync, requestRecordingPermissionsAsync } from 'expo-audio';
 import * as ImagePicker from 'expo-image-picker';
+import { NativeModules, Platform } from 'react-native';
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 
 import { STORAGE_KEYS } from '../../../constants/storageKeys';
 import { mmkvZustandStorage } from '../../../lib/mmkv/zustandStorage';
 
-export type PermissionState = 'undetermined' | 'granted' | 'denied';
-export type PermissionKey = 'camera' | 'photos' | 'microphone';
+export type PermissionState = 'undetermined' | 'granted' | 'denied' | 'requested' | 'unavailable';
+export type PermissionKey = 'camera' | 'photos' | 'microphone' | 'localNetwork';
 
 export interface PermissionSnapshot {
   camera: PermissionState;
   photos: PermissionState;
   microphone: PermissionState;
+  localNetwork: PermissionState;
+}
+
+interface LocalNetworkAuthorizationResponse {
+  status?: string;
+}
+
+interface ClawSurfaceBridgeModule {
+  requestLocalNetworkPermission?: (payload: string) => Promise<LocalNetworkAuthorizationResponse>;
 }
 
 interface PermissionStoreState {
@@ -20,18 +30,20 @@ interface PermissionStoreState {
   isHydrated: boolean;
   isRequesting: boolean;
   isPreflightingLocalNetwork: boolean;
-  localNetworkPreflightDone: boolean;
   refreshPermissions: () => Promise<PermissionSnapshot>;
-  requestRequiredPermissions: () => Promise<PermissionSnapshot>;
-  preflightLocalNetworkPermission: () => Promise<void>;
+  requestRequiredPermissions: (options?: { host?: string | null }) => Promise<PermissionSnapshot>;
+  preflightLocalNetworkPermission: (options?: { host?: string | null }) => Promise<PermissionState>;
   hasRequiredPermissions: () => boolean;
   getMissingPermissions: (snapshot?: PermissionSnapshot) => PermissionKey[];
 }
+
+const nativeBridge = NativeModules.ClawSurfaceBridge as ClawSurfaceBridgeModule | undefined;
 
 const DEFAULT_PERMISSIONS: PermissionSnapshot = {
   camera: 'undetermined',
   photos: 'undetermined',
   microphone: 'undetermined',
+  localNetwork: Platform.OS === 'ios' ? 'undetermined' : 'unavailable',
 };
 
 function toPermissionState(status: string): PermissionState {
@@ -43,10 +55,18 @@ function toPermissionState(status: string): PermissionState {
     return 'denied';
   }
 
+  if (status === 'requested') {
+    return 'requested';
+  }
+
+  if (status === 'unavailable') {
+    return 'unavailable';
+  }
+
   return 'undetermined';
 }
 
-async function readPermissionSnapshot(): Promise<PermissionSnapshot> {
+async function readPermissionSnapshot(currentLocalNetwork: PermissionState): Promise<PermissionSnapshot> {
   const [cameraPermission, mediaPermission, microphonePermission] = await Promise.all([
     ImagePicker.getCameraPermissionsAsync(),
     ImagePicker.getMediaLibraryPermissionsAsync(),
@@ -57,6 +77,7 @@ async function readPermissionSnapshot(): Promise<PermissionSnapshot> {
     camera: toPermissionState(cameraPermission.status),
     photos: toPermissionState(mediaPermission.status),
     microphone: toPermissionState(microphonePermission.status),
+    localNetwork: currentLocalNetwork,
   };
 }
 
@@ -71,36 +92,51 @@ function getMissingPermissions(permissions: PermissionSnapshot): PermissionKey[]
     missing.push('microphone');
   }
 
+  if (permissions.localNetwork === 'undetermined') {
+    missing.push('localNetwork');
+  }
+
   return missing;
 }
 
-async function triggerLocalNetworkPermissionPreflight(): Promise<void> {
-  const probes = [
-    'http://192.168.0.1',
-    'http://192.168.1.1',
-    'http://10.0.0.1',
-    'http://172.16.0.1',
-  ];
+function normalizeLocalNetworkState(status: string | undefined, previousState: PermissionState): PermissionState {
+  if (status === 'granted') {
+    return 'granted';
+  }
+  if (status === 'denied') {
+    return 'denied';
+  }
+  if (status === 'requested') {
+    return 'requested';
+  }
+  if (status === 'unavailable') {
+    return 'unavailable';
+  }
+  return previousState === 'undetermined' ? 'requested' : previousState;
+}
 
-  await Promise.allSettled(
-    probes.map(async (url) => {
-      const controller = new AbortController();
-      const timer = setTimeout(() => {
-        controller.abort();
-      }, 1200);
+async function triggerLocalNetworkPermissionPreflight(
+  previousState: PermissionState,
+  options?: { host?: string | null },
+): Promise<PermissionState> {
+  if (Platform.OS !== 'ios') {
+    return 'unavailable';
+  }
 
-      try {
-        await fetch(url, {
-          method: 'HEAD',
-          signal: controller.signal,
-        });
-      } catch {
-        // This call is only used to trigger iOS local-network permission prompt.
-      } finally {
-        clearTimeout(timer);
-      }
-    }),
-  );
+  if (!nativeBridge?.requestLocalNetworkPermission) {
+    return previousState === 'undetermined' ? 'requested' : previousState;
+  }
+
+  try {
+    const payload = await nativeBridge.requestLocalNetworkPermission(
+      JSON.stringify({
+        host: options?.host?.trim() || undefined,
+      }),
+    );
+    return normalizeLocalNetworkState(payload?.status, previousState);
+  } catch {
+    return previousState === 'undetermined' ? 'requested' : previousState;
+  }
 }
 
 export const usePermissionsStore = create<PermissionStoreState>()(
@@ -110,54 +146,48 @@ export const usePermissionsStore = create<PermissionStoreState>()(
       isHydrated: false,
       isRequesting: false,
       isPreflightingLocalNetwork: false,
-      localNetworkPreflightDone: false,
 
       refreshPermissions: async () => {
-        const nextPermissions = await readPermissionSnapshot();
+        const nextPermissions = await readPermissionSnapshot(get().permissions.localNetwork);
         set({ permissions: nextPermissions });
         return nextPermissions;
       },
 
-      requestRequiredPermissions: async () => {
+      requestRequiredPermissions: async (options) => {
         set({ isRequesting: true });
 
         try {
           const cameraPermission = await ImagePicker.requestCameraPermissionsAsync();
           const mediaPermission = await ImagePicker.requestMediaLibraryPermissionsAsync();
           const microphonePermission = await requestRecordingPermissionsAsync();
-          if (!get().localNetworkPreflightDone) {
-            // Non-blocking: avoid delaying onboarding when iOS network stack is slow.
-            void triggerLocalNetworkPermissionPreflight()
-              .then(() => {
-                set({ localNetworkPreflightDone: true });
-              })
-              .catch(() => {
-                // Best effort. We'll retry next app launch if needed.
-              });
-          }
+          set({ isPreflightingLocalNetwork: true });
+          const localNetwork = await triggerLocalNetworkPermissionPreflight(get().permissions.localNetwork, options);
 
           const nextPermissions: PermissionSnapshot = {
             camera: toPermissionState(cameraPermission.status),
             photos: toPermissionState(mediaPermission.status),
             microphone: toPermissionState(microphonePermission.status),
+            localNetwork,
           };
 
           set({ permissions: nextPermissions });
           return nextPermissions;
         } finally {
-          set({ isRequesting: false });
+          set({ isRequesting: false, isPreflightingLocalNetwork: false });
         }
       },
 
-      preflightLocalNetworkPermission: async () => {
-        if (get().localNetworkPreflightDone) {
-          return;
-        }
-
+      preflightLocalNetworkPermission: async (options) => {
         set({ isPreflightingLocalNetwork: true });
         try {
-          await triggerLocalNetworkPermissionPreflight();
-          set({ localNetworkPreflightDone: true });
+          const localNetwork = await triggerLocalNetworkPermissionPreflight(get().permissions.localNetwork, options);
+          set((state) => ({
+            permissions: {
+              ...state.permissions,
+              localNetwork,
+            },
+          }));
+          return localNetwork;
         } finally {
           set({ isPreflightingLocalNetwork: false });
         }
@@ -172,7 +202,6 @@ export const usePermissionsStore = create<PermissionStoreState>()(
       storage: createJSONStorage(() => mmkvZustandStorage),
       partialize: (state) => ({
         permissions: state.permissions,
-        localNetworkPreflightDone: state.localNetworkPreflightDone,
       }),
       onRehydrateStorage: () => () => {
         usePermissionsStore.setState({

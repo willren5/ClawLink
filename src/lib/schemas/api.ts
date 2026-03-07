@@ -82,6 +82,7 @@ export const AgentDetailResponseSchema = z.object({
 export const AgentLogsResponseSchema = z.object({
   agentId: z.string().min(1),
   logs: z.array(z.string()),
+  hasMore: z.boolean().optional(),
 });
 
 export const AgentLogStreamEventSchema = z.object({

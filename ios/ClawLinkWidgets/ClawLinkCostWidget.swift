@@ -4,7 +4,18 @@ import SwiftUI
 private enum ClawCostWidgetShared {
   static let appGroup = "group.com.fadmediagroup.clawlink"
   static let snapshotKey = "system-surface:snapshot"
+  static let widgetEnabledKey = "surface.widgetEnabled"
   static let supportedSchemaVersion = 1
+}
+
+private func costWidgetEnabled(defaults: UserDefaults?) -> Bool {
+  guard let defaults else {
+    return true
+  }
+  if defaults.object(forKey: ClawCostWidgetShared.widgetEnabledKey) == nil {
+    return true
+  }
+  return defaults.bool(forKey: ClawCostWidgetShared.widgetEnabledKey)
 }
 
 private struct CostWidgetSnapshot: Decodable {
@@ -140,6 +151,20 @@ private struct ClawLinkCostProvider: TimelineProvider {
   }
 
   private func makeEntry(now: Date) -> ClawLinkCostEntry {
+    let defaults = UserDefaults(suiteName: ClawCostWidgetShared.appGroup)
+    guard costWidgetEnabled(defaults: defaults) else {
+      return ClawLinkCostEntry(
+        date: now,
+        title: "ClawLink",
+        connection: "offline",
+        costToday: nil,
+        costYesterday: nil,
+        requestsToday: nil,
+        tokenUsageToday: nil,
+        requiresAppUpdate: false
+      )
+    }
+
     guard let snapshot = readSnapshot() else {
       return ClawLinkCostEntry(
         date: now,

@@ -1,4 +1,10 @@
 export type SecuritySeverity = 'CRITICAL' | 'WARNING' | 'INFO';
+export type SecurityPermission =
+  | 'network_access'
+  | 'command_execution'
+  | 'package_installation'
+  | 'file_system_write'
+  | 'secret_material';
 
 export type SecurityFindingType =
   | 'BASE64_STRING'
@@ -29,6 +35,7 @@ export interface SecurityScanResult {
   critical: number;
   warning: number;
   info: number;
+  permissions: SecurityPermission[];
   findings: SecurityFinding[];
 }
 
@@ -186,6 +193,34 @@ function scanTarget(target: SecurityScanTarget): SecurityFinding[] {
   return findings;
 }
 
+function derivePermissions(findings: SecurityFinding[]): SecurityPermission[] {
+  const permissions = new Set<SecurityPermission>();
+
+  for (const finding of findings) {
+    switch (finding.type) {
+      case 'BASE64_STRING':
+        permissions.add('secret_material');
+        break;
+      case 'SHELL_COMMAND':
+        permissions.add('command_execution');
+        break;
+      case 'PACKAGE_INSTALL':
+        permissions.add('package_installation');
+        break;
+      case 'FILE_SYSTEM_OPERATION':
+        permissions.add('file_system_write');
+        break;
+      case 'URL_OR_IP_IN_CODE_BLOCK':
+        permissions.add('network_access');
+        break;
+      default:
+        break;
+    }
+  }
+
+  return Array.from(permissions);
+}
+
 export function scanSecurityTargets(targets: SecurityScanTarget[]): SecurityScanResult {
   const findings = targets.flatMap((target) => scanTarget(target));
 
@@ -194,6 +229,7 @@ export function scanSecurityTargets(targets: SecurityScanTarget[]): SecurityScan
     critical: findings.filter((item) => item.severity === 'CRITICAL').length,
     warning: findings.filter((item) => item.severity === 'WARNING').length,
     info: findings.filter((item) => item.severity === 'INFO').length,
+    permissions: derivePermissions(findings),
     findings,
   };
 }

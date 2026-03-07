@@ -3,6 +3,11 @@ import { createJSONStorage, persist } from 'zustand/middleware';
 
 import { STORAGE_KEYS } from '../../../constants/storageKeys';
 import { mmkvZustandStorage } from '../../../lib/mmkv/zustandStorage';
+import {
+  EXPERIMENTAL_FEATURE_KEYS,
+  type ExperimentalFeatureKey,
+  type FeatureOverrides,
+} from '../../../lib/features/featureFlags';
 
 export type AppLanguage = 'zh' | 'en';
 export type ThemePreference = 'system' | 'light' | 'dark';
@@ -48,21 +53,36 @@ interface AppPreferencesStoreState {
   language: AppLanguage;
   themePreference: ThemePreference;
   accentColor: string;
+  persistChatTranscripts: boolean;
   liveActivityEnabled: boolean;
   dynamicIslandEnabled: boolean;
   widgetEnabled: boolean;
+  spotlightEnabled: boolean;
+  featureOverrides: FeatureOverrides;
   dashboardSectionOrder: DashboardSectionKey[];
   isHydrated: boolean;
   setLanguage: (language: AppLanguage) => void;
   setThemePreference: (value: ThemePreference) => void;
   setAccentColor: (value: string) => void;
+  setPersistChatTranscripts: (enabled: boolean) => void;
   setLiveActivityEnabled: (enabled: boolean) => void;
   setDynamicIslandEnabled: (enabled: boolean) => void;
   setWidgetEnabled: (enabled: boolean) => void;
+  setSpotlightEnabled: (enabled: boolean) => void;
+  setExperimentalFeatureEnabled: (key: ExperimentalFeatureKey, enabled: boolean) => void;
+  resetExperimentalFeatures: () => void;
   moveDashboardSection: (section: DashboardSectionKey, direction: 'up' | 'down') => void;
   resetDashboardSectionOrder: () => void;
   resetAppearance: () => void;
   resetAllPreferences: () => void;
+}
+
+function sanitizeFeatureOverrides(input: FeatureOverrides | null | undefined): FeatureOverrides {
+  return Object.fromEntries(
+    EXPERIMENTAL_FEATURE_KEYS.flatMap((key) =>
+      typeof input?.[key] === 'boolean' ? [[key, input[key]]] : [],
+    ),
+  ) as FeatureOverrides;
 }
 
 export const useAppPreferencesStore = create<AppPreferencesStoreState>()(
@@ -71,9 +91,12 @@ export const useAppPreferencesStore = create<AppPreferencesStoreState>()(
       language: DEFAULT_APP_LANGUAGE,
       themePreference: DEFAULT_THEME_PREFERENCE,
       accentColor: DEFAULT_ACCENT_COLOR,
+      persistChatTranscripts: true,
       liveActivityEnabled: true,
       dynamicIslandEnabled: true,
       widgetEnabled: true,
+      spotlightEnabled: false,
+      featureOverrides: {},
       dashboardSectionOrder: [...DEFAULT_DASHBOARD_SECTION_ORDER],
       isHydrated: false,
       setLanguage: (language) => {
@@ -89,6 +112,9 @@ export const useAppPreferencesStore = create<AppPreferencesStoreState>()(
         }
         set({ accentColor: normalized });
       },
+      setPersistChatTranscripts: (persistChatTranscripts) => {
+        set({ persistChatTranscripts });
+      },
       setLiveActivityEnabled: (enabled) => {
         set({ liveActivityEnabled: enabled });
       },
@@ -97,6 +123,20 @@ export const useAppPreferencesStore = create<AppPreferencesStoreState>()(
       },
       setWidgetEnabled: (enabled) => {
         set({ widgetEnabled: enabled });
+      },
+      setSpotlightEnabled: (enabled) => {
+        set({ spotlightEnabled: enabled });
+      },
+      setExperimentalFeatureEnabled: (key, enabled) => {
+        set((state) => ({
+          featureOverrides: {
+            ...state.featureOverrides,
+            [key]: enabled,
+          },
+        }));
+      },
+      resetExperimentalFeatures: () => {
+        set({ featureOverrides: {} });
       },
       moveDashboardSection: (section, direction) => {
         set((state) => {
@@ -132,9 +172,12 @@ export const useAppPreferencesStore = create<AppPreferencesStoreState>()(
           language: DEFAULT_APP_LANGUAGE,
           themePreference: DEFAULT_THEME_PREFERENCE,
           accentColor: DEFAULT_ACCENT_COLOR,
+          persistChatTranscripts: true,
           liveActivityEnabled: true,
           dynamicIslandEnabled: true,
           widgetEnabled: true,
+          spotlightEnabled: false,
+          featureOverrides: {},
           dashboardSectionOrder: [...DEFAULT_DASHBOARD_SECTION_ORDER],
         });
       },
@@ -146,9 +189,12 @@ export const useAppPreferencesStore = create<AppPreferencesStoreState>()(
         language: state.language,
         themePreference: state.themePreference,
         accentColor: state.accentColor,
+        persistChatTranscripts: state.persistChatTranscripts,
         liveActivityEnabled: state.liveActivityEnabled,
         dynamicIslandEnabled: state.dynamicIslandEnabled,
         widgetEnabled: state.widgetEnabled,
+        spotlightEnabled: state.spotlightEnabled,
+        featureOverrides: state.featureOverrides,
         dashboardSectionOrder: state.dashboardSectionOrder,
       }),
       onRehydrateStorage: () => () => {
@@ -163,6 +209,12 @@ export const useAppPreferencesStore = create<AppPreferencesStoreState>()(
           language: state.language === 'en' ? 'en' : 'zh',
           themePreference,
           accentColor: normalizeAccentColor(state.accentColor) ?? DEFAULT_ACCENT_COLOR,
+          persistChatTranscripts: state.persistChatTranscripts !== false,
+          liveActivityEnabled: state.liveActivityEnabled !== false,
+          dynamicIslandEnabled: state.dynamicIslandEnabled !== false,
+          widgetEnabled: state.widgetEnabled !== false,
+          spotlightEnabled: state.spotlightEnabled === true,
+          featureOverrides: sanitizeFeatureOverrides(state.featureOverrides),
           dashboardSectionOrder:
             dedupedOrder.length > 0 ? dedupedOrder : [...DEFAULT_DASHBOARD_SECTION_ORDER],
           isHydrated: true,

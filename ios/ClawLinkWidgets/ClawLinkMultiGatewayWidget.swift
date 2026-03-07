@@ -4,9 +4,20 @@ import SwiftUI
 private enum ClawMultiGatewayShared {
   static let appGroup = "group.com.fadmediagroup.clawlink"
   static let multiGatewayKey = "multi-gateway:status"
+  static let widgetEnabledKey = "surface.widgetEnabled"
   static let activeProfileClassKey = "surface.activeProfileClass"
   static let focusFilterModeKey = "surface.focus.filterMode"
   static let supportedSchemaVersion = 1
+}
+
+private func multiGatewayWidgetEnabled(defaults: UserDefaults?) -> Bool {
+  guard let defaults else {
+    return true
+  }
+  if defaults.object(forKey: ClawMultiGatewayShared.widgetEnabledKey) == nil {
+    return true
+  }
+  return defaults.bool(forKey: ClawMultiGatewayShared.widgetEnabledKey)
 }
 
 private enum SurfaceProfileClass: String {
@@ -98,6 +109,16 @@ private struct ClawLinkMultiGatewayProvider: TimelineProvider {
     let defaults = UserDefaults(suiteName: ClawMultiGatewayShared.appGroup)
     let suppressionReason = surfaceSuppressionReason(defaults: defaults)
     let surfacesSuppressed = suppressionReason != nil
+
+    guard multiGatewayWidgetEnabled(defaults: defaults) else {
+      return ClawLinkMultiGatewayEntry(
+        date: now,
+        gateways: [],
+        requiresAppUpdate: false,
+        surfacesSuppressed: false,
+        suppressionReason: nil
+      )
+    }
 
     guard let snapshot = readSnapshot() else {
       return ClawLinkMultiGatewayEntry(

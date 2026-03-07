@@ -1,0 +1,379 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=1242, initial-scale=1" />
+    <link rel="stylesheet" href="./shared.css" />
+    <title>ClawLink XHS Clickbait Cover</title>
+    <style>
+      .cover {
+        background:
+          radial-gradient(circle at 16% 15%, rgba(255, 114, 96, 0.2), transparent 24%),
+          radial-gradient(circle at 80% 18%, rgba(255, 207, 167, 0.42), transparent 22%),
+          radial-gradient(circle at 72% 82%, rgba(185, 214, 205, 0.36), transparent 24%),
+          linear-gradient(180deg, #f8f3ec 0%, #f5eee7 52%, #eef4f1 100%);
+      }
+
+      .wrap {
+        position: relative;
+        width: 100%;
+        height: 100%;
+        padding: 52px 46px 42px;
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 18px;
+      }
+
+      .brand-icon {
+        width: 82px;
+        height: 82px;
+        border-radius: 24px;
+        overflow: hidden;
+        box-shadow: 0 16px 34px rgba(15, 47, 57, 0.16);
+      }
+
+      .brand-icon img {
+        display: block;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+      }
+
+      .brand-copy strong {
+        display: block;
+        font-size: 34px;
+        font-weight: 900;
+        letter-spacing: -0.04em;
+      }
+
+      .brand-copy span {
+        display: block;
+        margin-top: 5px;
+        font-size: 20px;
+        font-weight: 800;
+        color: #5e7580;
+      }
+
+      .kicker {
+        margin-top: 28px;
+        display: inline-flex;
+        align-items: center;
+        gap: 14px;
+        padding: 16px 22px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.84);
+        border: 1px solid rgba(23, 48, 58, 0.12);
+        box-shadow: 0 14px 30px rgba(15, 47, 57, 0.08);
+        font-size: 24px;
+        font-weight: 900;
+        color: #18303a;
+      }
+
+      .kicker .dot {
+        width: 14px;
+        height: 14px;
+        border-radius: 999px;
+        background: #ff6d5f;
+        box-shadow: 0 0 0 8px rgba(255, 109, 95, 0.14);
+      }
+
+      .copy {
+        position: relative;
+        z-index: 3;
+        max-width: 700px;
+      }
+
+      .title {
+        margin: 28px 0 0;
+        font-size: 130px;
+        line-height: 0.86;
+        letter-spacing: -0.075em;
+        font-weight: 960;
+        color: #17303a;
+      }
+
+      .title .line {
+        display: block;
+      }
+
+      .title .accent {
+        display: inline-flex;
+        align-items: center;
+        padding: 8px 18px 14px;
+        border-radius: 30px;
+        background: #ff6d5f;
+        color: #fff9f2;
+        box-shadow: 0 18px 34px rgba(255, 109, 95, 0.22);
+      }
+
+      .title .line.tight {
+        letter-spacing: -0.09em;
+      }
+
+      .pain {
+        margin-top: 28px;
+        display: inline-flex;
+        align-items: center;
+        gap: 14px;
+        padding: 18px 24px;
+        border-radius: 30px;
+        background: #17303a;
+        color: #fff7ef;
+        box-shadow: 0 18px 36px rgba(15, 47, 57, 0.18);
+        font-size: 28px;
+        font-weight: 920;
+        line-height: 1.15;
+      }
+
+      .pain strong {
+        color: #ffc867;
+      }
+
+      .sub {
+        margin-top: 24px;
+        max-width: 650px;
+        font-size: 30px;
+        line-height: 1.42;
+        font-weight: 800;
+        color: #60747d;
+      }
+
+      .chip-row {
+        margin-top: 26px;
+        max-width: 700px;
+      }
+
+      .chip {
+        font-size: 24px;
+        font-weight: 900;
+        padding: 13px 20px;
+        background: rgba(255, 255, 255, 0.82);
+      }
+
+      .chip.hot {
+        background: rgba(255, 109, 95, 0.14);
+        border-color: rgba(255, 109, 95, 0.18);
+        color: #ae2f1e;
+      }
+
+      .stage {
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+      }
+
+      .glow {
+        position: absolute;
+        right: -12px;
+        top: 224px;
+        width: 650px;
+        height: 1080px;
+        border-radius: 50%;
+        background: radial-gradient(circle, rgba(255, 182, 119, 0.22), transparent 72%);
+        filter: blur(8px);
+      }
+
+      .phone-main {
+        position: absolute;
+        right: 34px;
+        top: 260px;
+        width: 490px;
+        height: 998px;
+        border-radius: 48px;
+        overflow: hidden;
+        border: 14px solid rgba(255, 255, 255, 0.86);
+        background: rgba(255, 255, 255, 0.86);
+        box-shadow: 0 26px 64px rgba(15, 47, 57, 0.2);
+        transform: rotate(6deg);
+        z-index: 2;
+      }
+
+      .phone-main img {
+        display: block;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+      }
+
+      .card {
+        position: absolute;
+        overflow: hidden;
+        border-radius: 34px;
+        border: 10px solid rgba(255, 255, 255, 0.8);
+        background: rgba(255, 255, 255, 0.82);
+        box-shadow: 0 20px 46px rgba(15, 47, 57, 0.16);
+      }
+
+      .card img {
+        display: block;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+      }
+
+      .card.agents {
+        left: 78px;
+        top: 988px;
+        width: 286px;
+        height: 520px;
+        transform: rotate(-10deg);
+        z-index: 1;
+      }
+
+      .card.monitor {
+        left: 320px;
+        top: 1130px;
+        width: 286px;
+        height: 420px;
+        transform: rotate(-4deg);
+        z-index: 2;
+      }
+
+      .card.chat {
+        right: 78px;
+        bottom: 66px;
+        width: 464px;
+        height: 290px;
+        transform: rotate(-3deg);
+        z-index: 4;
+      }
+
+      .ribbon {
+        position: absolute;
+        right: 68px;
+        top: 148px;
+        padding: 18px 24px;
+        border-radius: 24px;
+        background: #fff7ef;
+        border: 1px solid rgba(23, 48, 58, 0.12);
+        box-shadow: 0 18px 38px rgba(15, 47, 57, 0.12);
+        transform: rotate(6deg);
+        z-index: 5;
+      }
+
+      .ribbon strong {
+        display: block;
+        font-size: 30px;
+        line-height: 1.02;
+        font-weight: 950;
+        color: #17303a;
+      }
+
+      .ribbon span {
+        display: block;
+        margin-top: 10px;
+        font-size: 21px;
+        line-height: 1.22;
+        font-weight: 800;
+        color: #ff6d5f;
+      }
+
+      .footer {
+        position: absolute;
+        left: 46px;
+        right: 46px;
+        bottom: 32px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        z-index: 6;
+      }
+
+      .footer-note {
+        font-size: 21px;
+        font-weight: 800;
+        color: rgba(23, 48, 58, 0.46);
+      }
+
+      .footer-note strong {
+        color: #17303a;
+      }
+
+      .footer-tag {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        padding: 12px 18px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.78);
+        border: 1px solid rgba(23, 48, 58, 0.1);
+        font-size: 20px;
+        font-weight: 900;
+        color: #17303a;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="poster cover">
+      <div class="noise"></div>
+      <div class="wrap">
+        <section class="copy">
+          <div class="brand">
+            <div class="brand-icon"><img src="../../../assets/icon.png" alt="ClawLink app icon" /></div>
+            <div class="brand-copy">
+              <strong>ClawLink</strong>
+              <span>OpenClaw Gateway Remote</span>
+            </div>
+          </div>
+
+          <div class="kicker"><span class="dot"></span>OpenClaw / Agent / iPhone / Remote</div>
+
+          <h1 class="title">
+            <span class="line">别做手机版</span>
+            <span class="line tight">先做 <span class="accent">iPhone</span></span>
+            <span class="line">遥控器</span>
+          </h1>
+
+          <div class="pain">Agent 挂了？<strong>手机上直接救火</strong></div>
+
+          <div class="sub">
+            不只是提醒你出事了。<br />
+            而是让你在 iPhone 上继续看状态、切 Agent、盯日志、接着处理。
+          </div>
+
+          <div class="chip-row">
+            <div class="chip hot">看状态</div>
+            <div class="chip">切 Agent</div>
+            <div class="chip">盯日志</div>
+            <div class="chip">继续聊</div>
+            <div class="chip">多网关</div>
+            <div class="chip">系统小组件</div>
+          </div>
+        </section>
+
+        <section class="stage">
+          <div class="glow"></div>
+
+          <div class="ribbon">
+            <strong>不是通知壳</strong>
+            <span>是真的能接着处理</span>
+          </div>
+
+          <div class="phone phone-main">
+            <img src="../dashboard.png" alt="ClawLink dashboard screenshot" />
+          </div>
+
+          <div class="card agents">
+            <img src="../agents.png" alt="ClawLink agents screenshot" />
+          </div>
+
+          <div class="card monitor">
+            <img src="../monitor.png" alt="ClawLink monitor screenshot" />
+          </div>
+
+          <div class="card chat">
+            <img src="../chat.png" alt="ClawLink chat screenshot" />
+          </div>
+        </section>
+
+        <div class="footer">
+          <div class="footer-note">给 <strong>OpenClaw</strong> 做的 iOS 遥控端，不是另一个壳子。</div>
+          <div class="footer-tag">真实产品截图</div>
+        </div>
+      </div>
+    </main>
+  </body>
+</html>

@@ -25,6 +25,19 @@ interface ClawSurfaceBridgeModule {
 const nativeBridge = NativeModules.ClawSurfaceBridge as ClawSurfaceBridgeModule | undefined;
 let lastNativeSnapshot: SystemSurfaceSnapshot | null = null;
 
+function buildSurfacePreferences(): {
+  liveActivityEnabled: boolean;
+  dynamicIslandEnabled: boolean;
+  widgetEnabled: boolean;
+} {
+  const preferences = useAppPreferencesStore.getState();
+  return {
+    liveActivityEnabled: preferences.liveActivityEnabled,
+    dynamicIslandEnabled: preferences.dynamicIslandEnabled,
+    widgetEnabled: preferences.widgetEnabled,
+  };
+}
+
 export function buildSystemSurfaceSnapshot(
   _input?: {
     connectionStatus: 'connected' | 'connecting' | 'disconnected' | 'error';
@@ -125,16 +138,16 @@ export async function publishSystemSurfaces(snapshot: SystemSurfaceSnapshot): Pr
   const payload = JSON.stringify(buildSystemSurfacePayload(snapshot));
   const multiGatewayPayload = JSON.stringify(multiGatewayState);
   const preferencesPayload = JSON.stringify({
-    liveActivityEnabled: preferences.liveActivityEnabled,
-    dynamicIslandEnabled: preferences.dynamicIslandEnabled,
-    widgetEnabled: preferences.widgetEnabled,
+    ...buildSurfacePreferences(),
     activeProfileClass: focusPolicy.activeProfileClass,
   });
 
   const preferenceResult = await Promise.allSettled([nativeBridge.updateSurfacePreferences?.(preferencesPayload)]).then(
     (value) => value[0],
   );
-  const widgetSyncResult = await Promise.allSettled([nativeBridge.publishWidgetState?.(payload)]).then((value) => value[0]);
+  const widgetSyncResult = await Promise.allSettled([
+    preferences.widgetEnabled ? nativeBridge.publishWidgetState?.(payload) : Promise.resolve(),
+  ]).then((value) => value[0]);
   const liveActivityResult = await Promise.allSettled([
     focusPolicy.allowSystemSurfaces && preferences.liveActivityEnabled
       ? nativeBridge.publishLiveActivity?.(payload)
@@ -161,6 +174,14 @@ export async function publishSystemSurfaces(snapshot: SystemSurfaceSnapshot): Pr
   if (errors.length > 0) {
     throw new Error(errors.join(' '));
   }
+}
+
+export async function syncSurfacePreferences(): Promise<void> {
+  if (Platform.OS !== 'ios' || !nativeBridge?.updateSurfacePreferences) {
+    return;
+  }
+
+  await nativeBridge.updateSurfacePreferences(JSON.stringify(buildSurfacePreferences()));
 }
 
 export async function stopSystemLiveActivity(): Promise<void> {

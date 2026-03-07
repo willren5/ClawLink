@@ -25,12 +25,17 @@ import Markdown, { type ASTNode, type RenderRules } from 'react-native-markdown-
 import { useShallow } from 'zustand/react/shallow';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { LiquidGlassPanel } from '../../../components/LiquidGlassPanel';
 import { getAgents, getModels, getSessionsSummary } from '../../../lib/api';
+import { isExperimentalFeatureEnabled } from '../../../lib/features/featureFlags';
 import { useI18n } from '../../../lib/i18n';
 import { useAgentsRuntimeStore } from '../../agents/store/agentsRuntimeStore';
-import { adaptiveColor, createAdaptiveStyles, mapColorForMode, useThemeMode } from '../../../theme/adaptiveStyles';
+import { adaptiveColor, createAdaptiveStyles, mapColorForMode, useAccentColor, useThemeMode } from '../../../theme/adaptiveStyles';
 import { useConnectionStore } from '../../connection/store/connectionStore';
+import { useAppPreferencesStore } from '../../settings/store/preferencesStore';
+import { formatCurrencyAmount, usePricingStore } from '../../settings/store/pricingStore';
 import { useChatStore } from '../store/chatStore';
+import { resolveRunbooksForAgent, useChatRunbookStore, type ChatRunbook } from '../store/runbookStore';
 import { MessageSearch, type MessageSearchResult } from '../components/MessageSearch';
 import { exportSessionToFile, shareExportedSession } from '../services/sessionExport';
 import { transcribeAudioUri } from '../services/transcription';
@@ -46,6 +51,11 @@ const MAX_ATTACHMENTS = 3;
 const MAX_IMAGE_BASE64_LENGTH = 32_000_000;
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_REASONING_EFFORT: ReasoningEffort = 'medium';
+
+function withAlpha(color: string, alpha: string): string {
+  const normalized = color.trim().replace(/^#/, '');
+  return /^[0-9A-Fa-f]{6}$/.test(normalized) ? `#${normalized}${alpha}` : color;
+}
 
 interface AgentOption {
   id: string;
@@ -80,12 +90,6 @@ interface InlineNotice {
   title: string;
   body: string;
   tone: 'info' | 'error' | 'success';
-}
-
-interface QuickTemplate {
-  id: string;
-  label: string;
-  text: string;
 }
 
 function supportsReasoningByModel(modelId: string): boolean {
@@ -331,7 +335,10 @@ function parseMentionedAgent(content: string, agents: AgentOption[]): AgentOptio
   return null;
 }
 
-function groupSessionsByRecency(sessions: LocalChatSession[]): SessionSection[] {
+function groupSessionsByRecency(
+  sessions: LocalChatSession[],
+  t: ReturnType<typeof useI18n>['t'],
+): SessionSection[] {
   const now = Date.now();
   const todayStart = toDayStart(now);
   const yesterdayStart = todayStart - DAY_IN_MS;
@@ -385,19 +392,19 @@ function groupSessionsByRecency(sessions: LocalChatSession[]): SessionSection[] 
 
   const sections: SessionSection[] = [];
   if (today.length > 0) {
-    sections.push({ key: 'today', title: 'Today', data: today });
+    sections.push({ key: 'today', title: t('chat_section_today'), data: today });
   }
   if (yesterday.length > 0) {
-    sections.push({ key: 'yesterday', title: 'Yesterday', data: yesterday });
+    sections.push({ key: 'yesterday', title: t('chat_section_yesterday'), data: yesterday });
   }
   if (thisWeek.length > 0) {
-    sections.push({ key: 'this-week', title: 'This Week', data: thisWeek });
+    sections.push({ key: 'this-week', title: t('chat_section_this_week'), data: thisWeek });
   }
   if (lastWeek.length > 0) {
-    sections.push({ key: 'last-week', title: 'Last Week', data: lastWeek });
+    sections.push({ key: 'last-week', title: t('chat_section_last_week'), data: lastWeek });
   }
   if (thisMonth.length > 0) {
-    sections.push({ key: 'this-month', title: 'This Month', data: thisMonth });
+    sections.push({ key: 'this-month', title: t('chat_section_this_month'), data: thisMonth });
   }
 
   const olderSections = Array.from(olderByMonth.entries())
@@ -411,6 +418,105 @@ function groupSessionsByRecency(sessions: LocalChatSession[]): SessionSection[] 
   return [...sections, ...olderSections];
 }
 
+const MessageAttachmentGallery = memo(function MessageAttachmentGallery(props: {
+  messageId: string;
+  attachments: ChatAttachmentPreview[];
+}): JSX.Element | null {
+  const { width } = useWindowDimensions();
+  const themeMode = useThemeMode();
+  const featureOverrides = useAppPreferencesStore((state) => state.featureOverrides);
+  const carouselEnabled = useMemo(
+    () => isExperimentalFeatureEnabled('chatImageCarousel', featureOverrides),
+    [featureOverrides],
+  );
+  const imageAttachments = useMemo(
+    () => props.attachments.filter((attachment) => attachment.type === 'image'),
+    [props.attachments],
+  );
+  const [activeIndex, setActiveIndex] = useState(0);
+  const pageWidth = Math.max(140, Math.min(width - 84, 220));
+
+  useEffect(() => {
+    setActiveIndex(0);
+  }, [props.messageId]);
+
+  if (imageAttachments.length === 0) {
+    return null;
+  }
+
+  if (!carouselEnabled || imageAttachments.length === 1) {
+    return (
+      <View style={styles.messageAttachmentRow}>
+        {imageAttachments.map((attachment, index) =>
+          attachment.previewUri ? (
+            <Image
+              key={`${props.messageId}:img:${index}`}
+              source={{ uri: attachment.previewUri }}
+              style={styles.messageImage}
+              resizeMode="cover"
+            />
+          ) : (
+            <View key={`${props.messageId}:img:${index}`} style={styles.messageImagePlaceholder}>
+              <Text style={styles.messageImagePlaceholderText}>Image</Text>
+            </View>
+          ),
+        )}
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.messageCarouselWrap}>
+      <ScrollView
+        horizontal
+        pagingEnabled
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.messageCarouselContent}
+        onMomentumScrollEnd={(event) => {
+          const nextIndex = Math.round(event.nativeEvent.contentOffset.x / Math.max(pageWidth, 1));
+          setActiveIndex(Math.max(0, Math.min(imageAttachments.length - 1, nextIndex)));
+        }}
+      >
+        {imageAttachments.map((attachment, index) => (
+          <View
+            key={`${props.messageId}:carousel:${index}`}
+            style={[styles.messageCarouselPage, { width: pageWidth }]}
+          >
+            {attachment.previewUri ? (
+              <Image
+                source={{ uri: attachment.previewUri }}
+                style={[
+                  styles.messageCarouselImage,
+                  {
+                    width: pageWidth - 2,
+                    borderColor: mapColorForMode('#1E293B', themeMode),
+                  },
+                ]}
+                resizeMode="cover"
+              />
+            ) : (
+              <View style={[styles.messageImagePlaceholder, { width: pageWidth - 2 }]}>
+                <Text style={styles.messageImagePlaceholderText}>Image</Text>
+              </View>
+            )}
+          </View>
+        ))}
+      </ScrollView>
+      <View style={styles.messageCarouselDots}>
+        {imageAttachments.map((_, index) => (
+          <View
+            key={`${props.messageId}:dot:${index}`}
+            style={[
+              styles.messageCarouselDot,
+              index === activeIndex && styles.messageCarouselDotActive,
+            ]}
+          />
+        ))}
+      </View>
+    </View>
+  );
+});
+
 const MessageBubble = memo(function MessageBubble(props: {
   message: LocalChatMessage;
   onRetry: (messageId: string, sessionId: string) => void;
@@ -419,30 +525,41 @@ const MessageBubble = memo(function MessageBubble(props: {
   const { t } = useI18n();
   const isUser = props.message.role === 'user';
   const themeMode = useThemeMode();
+  const accentColor = useAccentColor();
   const usePlainText =
     isUser ||
     (props.message.role === 'assistant' &&
       (props.message.syncStatus === 'streaming' || props.message.syncStatus === 'failed'));
-  const bubbleBorderColor = isUser ? mapColorForMode('#2563EB', themeMode) : mapColorForMode('#1E293B', themeMode);
-  const bubbleBackgroundColor = isUser ? mapColorForMode('#0C4A6E', themeMode) : mapColorForMode('#0B1220', themeMode);
-  const roleColor = isUser
+  const featureOverrides = useAppPreferencesStore((state) => state.featureOverrides);
+  const reasoningTimelineEnabled = useMemo(
+    () => isExperimentalFeatureEnabled('reasoningTimeline', featureOverrides),
+    [featureOverrides],
+  );
+  const bubbleSurfaceStyle = useMemo(
+    () =>
+      isUser
+        ? {
+            backgroundColor: themeMode === 'light' ? withAlpha(accentColor, '12') : withAlpha(accentColor, '2A'),
+            borderColor: themeMode === 'light' ? withAlpha(accentColor, '26') : withAlpha(accentColor, '3D'),
+          }
+        : {
+            backgroundColor: themeMode === 'light' ? 'rgba(255,255,255,0.76)' : 'rgba(8,15,28,0.72)',
+            borderColor: themeMode === 'light' ? 'rgba(78,100,113,0.14)' : 'rgba(202,255,245,0.14)',
+          },
+    [accentColor, isUser, themeMode],
+  );
+  const bubbleTextColor = isUser
     ? themeMode === 'light'
-      ? '#1C3F4D'
-      : mapColorForMode('#F8FAFC', themeMode)
-    : mapColorForMode('#A7F3D0', themeMode);
-  const timeColor = isUser
-    ? themeMode === 'light'
-      ? '#2E5665'
-      : mapColorForMode('#F8FAFC', themeMode)
-    : mapColorForMode('#94A3B8', themeMode);
-  const plainTextColor = isUser
-    ? themeMode === 'light'
-      ? '#264653'
-      : mapColorForMode('#F8FAFC', themeMode)
-    : mapColorForMode('#E2E8F0', themeMode);
+      ? '#17323C'
+      : '#F8FAFC'
+    : themeMode === 'light'
+      ? '#213C47'
+      : '#E2E8F0';
+  const metaTextColor = themeMode === 'light' ? '#5C7480' : '#9CC4BD';
+  const usageTextColor = themeMode === 'light' ? '#45616E' : '#A9DDD1';
   const [timelineExpanded, setTimelineExpanded] = useState(false);
   const timelineSteps = props.message.toolTimeline ?? [];
-  const hasTimeline = props.message.role === 'assistant' && timelineSteps.length > 0;
+  const hasTimeline = reasoningTimelineEnabled && props.message.role === 'assistant' && timelineSteps.length > 0;
   const usageSummary = useMemo(() => {
     const usage = props.message.usage;
     if (!usage) {
@@ -468,9 +585,9 @@ const MessageBubble = memo(function MessageBubble(props: {
     () =>
       ({
         body: {
-          color: mapColorForMode('#E2E8F0', themeMode),
-          fontSize: 13,
-          lineHeight: 18,
+          color: bubbleTextColor,
+          fontSize: 16,
+          lineHeight: 22,
         },
         code_block: {
           backgroundColor: mapColorForMode('#020617', themeMode),
@@ -489,7 +606,7 @@ const MessageBubble = memo(function MessageBubble(props: {
           color: mapColorForMode('#93C5FD', themeMode),
         },
       }) as const,
-    [themeMode],
+    [bubbleTextColor, themeMode],
   );
   const renderCodeBlock = useCallback(
     (node: ASTNode & { sourceInfo?: string }): JSX.Element => {
@@ -545,6 +662,11 @@ const MessageBubble = memo(function MessageBubble(props: {
   );
   const fadeIn = useRef(new Animated.Value(0)).current;
   const slideIn = useRef(new Animated.Value(6)).current;
+  const syncStatusLabel = props.message.syncStatus === 'synced' ? null : formatSyncStatusLabel(props.message.syncStatus, t);
+  const timeLabel = new Date(props.message.timestamp).toLocaleTimeString([], {
+    hour: 'numeric',
+    minute: '2-digit',
+  });
 
   useEffect(() => {
     Animated.parallel([
@@ -570,50 +692,49 @@ const MessageBubble = memo(function MessageBubble(props: {
         transform: [{ translateY: slideIn }],
       }}
     >
-      <View
-        style={[
-          styles.messageBubble,
-          { borderColor: bubbleBorderColor, backgroundColor: bubbleBackgroundColor },
-          props.highlighted && styles.messageBubbleHighlighted,
-        ]}
-      >
-      <View style={styles.messageHeader}>
-        <Text style={[styles.messageRole, { color: roleColor }]}>
-          {props.message.role.toUpperCase()}
-        </Text>
-        <Text style={[styles.messageTime, { color: timeColor }]}>
-          {new Date(props.message.timestamp).toLocaleTimeString()}
-        </Text>
-      </View>
-
-      {usePlainText ? (
-        <Text style={[styles.messagePlainText, { color: plainTextColor }]}>{props.message.content || '...'}</Text>
-      ) : (
-        <Markdown style={markdownStyles} rules={markdownRules}>
-          {props.message.content || '...'}
-        </Markdown>
-      )}
+      <View style={[styles.messageGroup, isUser ? styles.messageGroupUser : styles.messageGroupAssistant]}>
+        <LiquidGlassPanel
+          style={[
+            styles.messageBubble,
+            isUser ? styles.messageBubbleUser : styles.messageBubbleAssistant,
+            bubbleSurfaceStyle,
+            props.highlighted && styles.messageBubbleHighlighted,
+          ]}
+        >
+          {usePlainText ? (
+            <Text style={[styles.messagePlainText, { color: bubbleTextColor }]}>{props.message.content || '...'}</Text>
+          ) : (
+            <Markdown style={markdownStyles} rules={markdownRules}>
+              {props.message.content || '...'}
+            </Markdown>
+          )}
 
       {hasTimeline && (
         <View style={styles.timelinePanel}>
           <Pressable
             style={styles.timelineHeader}
-            onPress={() => {
-              setTimelineExpanded((current) => !current);
-            }}
+                onPress={() => {
+                  setTimelineExpanded((current) => !current);
+                }}
           >
-            <Text style={styles.timelineTitle}>
-              {timelineExpanded ? '▾' : '▸'} Tool Timeline ({timelineSteps.length})
-            </Text>
+            <View style={styles.timelineHeaderCopy}>
+              <Text style={styles.timelineTitle}>
+                {timelineExpanded ? '▾' : '▸'} Reasoning & Tools ({timelineSteps.length})
+              </Text>
+              {!!usageSummary && <Text style={styles.timelineUsage}>{usageSummary}</Text>}
+            </View>
           </Pressable>
 
           {timelineExpanded && (
             <View style={styles.timelineList}>
               {timelineSteps.map((step, index) => (
-                <Text key={step.id} style={styles.timelineLine}>
-                  {index === timelineSteps.length - 1 ? '└' : '├'} {timelineIconByKind(step.kind)} {step.label}{' '}
-                  {(Math.max(step.durationMs, 0) / 1000).toFixed(1)}s
-                </Text>
+                <View key={step.id} style={styles.timelineItem}>
+                  <Text style={styles.timelineLine}>
+                    {index === timelineSteps.length - 1 ? '└' : '├'} {timelineIconByKind(step.kind)} {step.label}{' '}
+                    {(Math.max(step.durationMs, 0) / 1000).toFixed(1)}s
+                  </Text>
+                  {!!step.details && <Text style={styles.timelineDetails}>{step.details}</Text>}
+                </View>
               ))}
             </View>
           )}
@@ -621,54 +742,27 @@ const MessageBubble = memo(function MessageBubble(props: {
       )}
 
       {!!props.message.attachments?.length && (
-        <View style={styles.messageAttachmentRow}>
-          {props.message.attachments.map((attachment, index) =>
-            attachment.type === 'image' ? (
-              attachment.previewUri ? (
-                <Image
-                  key={`${props.message.id}:img:${index}`}
-                  source={{ uri: attachment.previewUri }}
-                  style={styles.messageImage}
-                  resizeMode="cover"
-                />
-              ) : (
-                <View key={`${props.message.id}:img:${index}`} style={styles.messageImagePlaceholder}>
-                  <Text style={styles.messageImagePlaceholderText}>Image</Text>
-                </View>
-              )
-            ) : null,
+        <MessageAttachmentGallery messageId={props.message.id} attachments={props.message.attachments} />
+      )}
+        </LiquidGlassPanel>
+
+        <View style={[styles.messageMetaRow, isUser ? styles.messageMetaRowUser : styles.messageMetaRowAssistant]}>
+          {!!usageSummary && !isUser && <Text style={[styles.messageUsageMeta, { color: usageTextColor }]}>{usageSummary}</Text>}
+          <Text style={[styles.messageMetaText, { color: metaTextColor }]}>
+            {syncStatusLabel ? `${timeLabel} · ${syncStatusLabel}` : timeLabel}
+          </Text>
+
+          {props.message.syncStatus === 'failed' && props.message.role === 'user' && (
+            <Pressable
+              style={styles.retryButton}
+              onPress={() => {
+                props.onRetry(props.message.id, props.message.sessionId);
+              }}
+            >
+              <Text style={styles.retryText}>{t('chat_retry')}</Text>
+            </Pressable>
           )}
         </View>
-      )}
-
-      <View style={styles.messageFooter}>
-        <View style={styles.messageFooterMeta}>
-          {!!usageSummary && <Text style={styles.messageUsageMeta}>{usageSummary}</Text>}
-          <Text
-            style={[
-              styles.syncStatus,
-              props.message.syncStatus === 'failed'
-                ? styles.syncFailed
-                : props.message.syncStatus === 'pending' || props.message.syncStatus === 'streaming'
-                  ? styles.syncPending
-                  : styles.syncOk,
-            ]}
-          >
-            {formatSyncStatusLabel(props.message.syncStatus, t)}
-          </Text>
-        </View>
-
-        {props.message.syncStatus === 'failed' && props.message.role === 'user' && (
-          <Pressable
-            style={styles.retryButton}
-            onPress={() => {
-              props.onRetry(props.message.id, props.message.sessionId);
-            }}
-          >
-            <Text style={styles.retryText}>{t('chat_retry')}</Text>
-          </Pressable>
-        )}
-      </View>
       </View>
     </Animated.View>
   );
@@ -678,7 +772,7 @@ const ChatHeader = memo(function ChatHeader(props: {
   pendingQueueLength: number;
   isStreaming: boolean;
   tokenCount: number;
-  estimatedCost: number;
+  estimatedCostLabel: string;
   contextTokens: number;
   contextLimit: number;
   agentsLoading: boolean;
@@ -696,6 +790,7 @@ const ChatHeader = memo(function ChatHeader(props: {
 }): JSX.Element {
   const { t } = useI18n();
   const themeMode = useThemeMode();
+  const accentColor = useAccentColor();
   const searchIconColor = mapColorForMode('#E2E8F0', themeMode);
   const currentModeLabel = props.activeAgentId
     ? props.agents.find((item) => item.id === props.activeAgentId)?.name ?? props.activeAgentId
@@ -705,51 +800,125 @@ const ChatHeader = memo(function ChatHeader(props: {
     : null;
   const contextPercent = Math.max(0, Math.min(100, Math.round((props.contextTokens / Math.max(props.contextLimit, 1)) * 100)));
   const contextWarning = contextPercent >= 85;
-  const contextBarColor = contextWarning ? '#F87171' : '#22D3EE';
+  const headerSurfaceStyle = useMemo(
+    () => ({
+      backgroundColor: themeMode === 'light' ? 'rgba(255,255,255,0.84)' : 'rgba(8,15,28,0.78)',
+      borderColor: themeMode === 'light' ? 'rgba(78,100,113,0.14)' : 'rgba(202,255,245,0.14)',
+    }),
+    [themeMode],
+  );
+  const railSurfaceStyle = useMemo(
+    () => ({
+      backgroundColor: themeMode === 'light' ? 'rgba(255,255,255,0.7)' : 'rgba(8,15,28,0.64)',
+      borderColor: themeMode === 'light' ? 'rgba(78,100,113,0.12)' : 'rgba(202,255,245,0.12)',
+    }),
+    [themeMode],
+  );
+  const chipStyle = useMemo(
+    () => ({
+      backgroundColor: themeMode === 'light' ? 'rgba(255,255,255,0.68)' : 'rgba(255,255,255,0.06)',
+      borderColor: themeMode === 'light' ? 'rgba(78,100,113,0.14)' : 'rgba(202,255,245,0.12)',
+    }),
+    [themeMode],
+  );
+  const chipSelectedStyle = useMemo(
+    () => ({
+      backgroundColor: themeMode === 'light' ? withAlpha(accentColor, '14') : withAlpha(accentColor, '2B'),
+      borderColor: themeMode === 'light' ? withAlpha(accentColor, '2B') : withAlpha(accentColor, '42'),
+    }),
+    [accentColor, themeMode],
+  );
+  const chipTextStyle = useMemo(
+    () => ({
+      color: themeMode === 'light' ? '#264653' : '#E2E8F0',
+    }),
+    [themeMode],
+  );
+  const chipTextSelectedStyle = useMemo(
+    () => ({
+      color: themeMode === 'light' ? accentColor : '#F8FAFC',
+    }),
+    [accentColor, themeMode],
+  );
+  const statusPillStyle = useMemo(
+    () => ({
+      backgroundColor: themeMode === 'light' ? 'rgba(255,255,255,0.72)' : 'rgba(255,255,255,0.06)',
+      borderColor: themeMode === 'light' ? 'rgba(78,100,113,0.12)' : 'rgba(202,255,245,0.1)',
+    }),
+    [themeMode],
+  );
+  const statusWarningStyle = useMemo(
+    () => ({
+      backgroundColor: themeMode === 'light' ? 'rgba(194,62,87,0.08)' : 'rgba(255,142,162,0.12)',
+      borderColor: themeMode === 'light' ? 'rgba(194,62,87,0.18)' : 'rgba(255,142,162,0.18)',
+    }),
+    [themeMode],
+  );
+  const statusTextStyle = useMemo(
+    () => ({
+      color: themeMode === 'light' ? '#45616E' : '#A9DDD1',
+    }),
+    [themeMode],
+  );
+  const statusWarningTextStyle = useMemo(
+    () => ({
+      color: themeMode === 'light' ? '#B23A48' : '#FF8EA2',
+    }),
+    [themeMode],
+  );
 
   return (
-    <>
-      <View style={styles.header}>
+    <View style={styles.headerStack}>
+      <LiquidGlassPanel style={[styles.headerCard, headerSurfaceStyle]}>
         <View style={styles.headerTopRow}>
           <Text style={styles.title}>{t('chat_title')}</Text>
-          <Pressable style={styles.searchButton} onPress={props.onOpenSearch} accessibilityLabel={t('chat_search_open')}>
+          <Pressable
+            style={[styles.iconGlassButton, chipStyle]}
+            onPress={props.onOpenSearch}
+            accessibilityLabel={t('chat_search_open')}
+          >
             <Ionicons name="search-outline" size={16} color={searchIconColor} />
           </Pressable>
         </View>
-        <Text style={styles.subtitle}>
-          {props.isStreaming
-            ? `${t('chat_pending_queue')}: ${props.pendingQueueLength} · ${t('chat_streaming')}`
-            : `${t('chat_pending_queue')}: ${props.pendingQueueLength}`}
-        </Text>
-        <Text style={styles.tokenUsageBadge}>
-          {`${formatCompactTokenCount(props.tokenCount)} ${t('chat_tokens_label')} · $${props.estimatedCost.toFixed(2)}`}
-        </Text>
-        <View style={styles.contextBarRow}>
-          <View style={styles.contextTrack}>
-            <View style={[styles.contextFill, { width: `${contextPercent}%`, backgroundColor: contextBarColor }]} />
-          </View>
-          <Text style={[styles.contextLabel, contextWarning && styles.contextLabelWarning]}>
-            ctx {formatCompactTokenCount(props.contextTokens)}/{formatCompactTokenCount(props.contextLimit)} ({contextPercent}%)
-          </Text>
-        </View>
-        {contextWarning && (
-          <Text style={styles.contextWarningText}>Consider clearing context</Text>
-        )}
-        <Text style={styles.modeHint}>
-          {t('chat_mode')}: {currentModeLabel}
-        </Text>
-      </View>
 
-      <View style={styles.agentsRow}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.statusRail}>
+          <View style={[styles.statusPill, statusPillStyle]}>
+            <Text style={[styles.statusPillText, statusTextStyle]}>
+              {props.isStreaming
+                ? `${t('chat_pending_queue')}: ${props.pendingQueueLength} · ${t('chat_streaming')}`
+                : `${t('chat_pending_queue')}: ${props.pendingQueueLength}`}
+            </Text>
+          </View>
+          <View style={[styles.statusPill, statusPillStyle]}>
+            <Text style={[styles.statusPillText, statusTextStyle]}>
+              {`${formatCompactTokenCount(props.tokenCount)} ${t('chat_tokens_label')} · ${props.estimatedCostLabel}`}
+            </Text>
+          </View>
+          <View style={[styles.statusPill, contextWarning ? statusWarningStyle : statusPillStyle]}>
+            <Text style={[styles.statusPillText, contextWarning ? statusWarningTextStyle : statusTextStyle]}>
+              {`ctx ${formatCompactTokenCount(props.contextTokens)}/${formatCompactTokenCount(props.contextLimit)} (${contextPercent}%)`}
+            </Text>
+          </View>
+          <View style={[styles.statusPill, statusPillStyle]}>
+            <Text style={[styles.statusPillText, statusTextStyle]}>
+              {`${t('chat_mode')}: ${currentModeLabel}`}
+            </Text>
+          </View>
+        </ScrollView>
+      </LiquidGlassPanel>
+
+      <LiquidGlassPanel style={[styles.controlRailShell, railSurfaceStyle]}>
         {props.agentsLoading ? (
-          <ActivityIndicator color={adaptiveColor('#38BDF8')} />
+          <View style={styles.controlRailLoading}>
+            <ActivityIndicator color={adaptiveColor('#38BDF8')} />
+          </View>
         ) : (
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.horizontalList}>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.controlRailContent}>
             <Pressable
-              style={[styles.agentChip, !props.activeAgentId && styles.agentChipSelected]}
+              style={[styles.controlChip, chipStyle, !props.activeAgentId && chipSelectedStyle]}
               onPress={props.onSelectDirectSessionMode}
             >
-              <Text style={[styles.agentChipText, !props.activeAgentId && styles.agentChipTextSelected]}>
+              <Text style={[styles.controlChipText, chipTextStyle, !props.activeAgentId && chipTextSelectedStyle]}>
                 {t('chat_session_chip')}
               </Text>
             </Pressable>
@@ -759,33 +928,35 @@ const ChatHeader = memo(function ChatHeader(props: {
               return (
                 <Pressable
                   key={item.id}
-                  style={[styles.agentChip, selected && styles.agentChipSelected]}
+                  style={[styles.controlChip, chipStyle, selected && chipSelectedStyle]}
                   onPress={() => {
                     props.onSelectAgent(item.id);
                   }}
                 >
-                  <Text style={[styles.agentChipText, selected && styles.agentChipTextSelected]}>{item.name}</Text>
+                  <Text style={[styles.controlChipText, chipTextStyle, selected && chipTextSelectedStyle]}>
+                    {item.name}
+                  </Text>
                 </Pressable>
               );
             })}
 
-            <Pressable style={styles.newSessionButton} onPress={props.onCreateSession}>
-              <Text style={styles.newSessionText}>{t('chat_new_session')}</Text>
+            <Pressable style={[styles.controlChip, styles.newSessionChip, chipStyle]} onPress={props.onCreateSession}>
+              <Text style={[styles.controlChipText, chipTextStyle]}>{t('chat_new_session')}</Text>
             </Pressable>
           </ScrollView>
         )}
-      </View>
+      </LiquidGlassPanel>
 
-      <View style={styles.modelToolbar}>
-        <Text style={styles.modelToolbarLabel}>{t('chat_model_label')}</Text>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.modelList}>
+      <LiquidGlassPanel style={[styles.controlRailShell, railSurfaceStyle]}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.controlRailContent}>
+          <Text style={styles.controlRailLabel}>{t('chat_model_label')}</Text>
           <Pressable
-            style={[styles.modelChip, !props.selectedModel && styles.modelChipSelected]}
+            style={[styles.controlChip, chipStyle, !props.selectedModel && chipSelectedStyle]}
             onPress={() => {
               props.onSelectModel(null);
             }}
           >
-            <Text style={[styles.modelChipText, !props.selectedModel && styles.modelChipTextSelected]}>
+            <Text style={[styles.controlChipText, chipTextStyle, !props.selectedModel && chipTextSelectedStyle]}>
               {t('chat_gateway_default')}
             </Text>
           </Pressable>
@@ -795,39 +966,36 @@ const ChatHeader = memo(function ChatHeader(props: {
             return (
               <Pressable
                 key={item.id}
-                style={[styles.modelChip, selected && styles.modelChipSelected]}
+                style={[styles.controlChip, chipStyle, selected && chipSelectedStyle]}
                 onPress={() => {
                   props.onSelectModel(item.id);
                 }}
               >
-                <Text style={[styles.modelChipText, selected && styles.modelChipTextSelected]}>{item.label}</Text>
+                <Text style={[styles.controlChipText, chipTextStyle, selected && chipTextSelectedStyle]}>{item.label}</Text>
               </Pressable>
             );
           })}
-        </ScrollView>
 
-        {(selectedModelMeta?.supportsReasoning ?? false) && (
-          <View style={styles.reasoningRow}>
-            {(['minimal', 'low', 'medium', 'high'] as ReasoningEffort[]).map((effort) => {
+          {(selectedModelMeta?.supportsReasoning ?? false) &&
+            (['minimal', 'low', 'medium', 'high'] as ReasoningEffort[]).map((effort) => {
               const selected = effort === props.selectedReasoningEffort;
               return (
                 <Pressable
                   key={effort}
-                  style={[styles.reasoningChip, selected && styles.reasoningChipSelected]}
+                  style={[styles.controlChip, chipStyle, selected && chipSelectedStyle]}
                   onPress={() => {
                     props.onSelectReasoningEffort(effort);
                   }}
                 >
-                  <Text style={[styles.reasoningChipText, selected && styles.reasoningChipTextSelected]}>
+                  <Text style={[styles.controlChipText, chipTextStyle, selected && chipTextSelectedStyle]}>
                     {t('chat_reasoning_prefix')} {effort}
                   </Text>
                 </Pressable>
               );
             })}
-          </View>
-        )}
-      </View>
-    </>
+        </ScrollView>
+      </LiquidGlassPanel>
+    </View>
   );
 });
 
@@ -1010,6 +1178,8 @@ const ChatComposer = memo(function ChatComposer(props: {
   onExportMarkdown: () => void;
   onExportJson: () => void;
   onOpenQuickTemplates: () => void;
+  runbooks: ChatRunbook[];
+  onApplyRunbook: (runbook: ChatRunbook) => void;
   exportBusy: boolean;
   composerAttachments: ComposerAttachment[];
   onRemoveAttachment: (index: number) => void;
@@ -1028,9 +1198,44 @@ const ChatComposer = memo(function ChatComposer(props: {
 }): JSX.Element {
   const { t } = useI18n();
   const themeMode = useThemeMode();
+  const accentColor = useAccentColor();
   const iconColor = mapColorForMode('#CBD5E1', themeMode);
   const recordingColor = mapColorForMode('#FCA5A5', themeMode);
+  const composerSurfaceStyle = useMemo(
+    () => ({
+      backgroundColor: themeMode === 'light' ? 'rgba(255,255,255,0.84)' : 'rgba(8,15,28,0.78)',
+      borderColor: themeMode === 'light' ? 'rgba(78,100,113,0.14)' : 'rgba(202,255,245,0.14)',
+    }),
+    [themeMode],
+  );
+  const controlSurfaceStyle = useMemo(
+    () => ({
+      backgroundColor: themeMode === 'light' ? 'rgba(255,255,255,0.68)' : 'rgba(255,255,255,0.06)',
+      borderColor: themeMode === 'light' ? 'rgba(78,100,113,0.14)' : 'rgba(202,255,245,0.12)',
+    }),
+    [themeMode],
+  );
+  const sendSurfaceStyle = useMemo(
+    () => ({
+      backgroundColor: themeMode === 'light' ? withAlpha(accentColor, '16') : withAlpha(accentColor, '30'),
+      borderColor: themeMode === 'light' ? withAlpha(accentColor, '2D') : withAlpha(accentColor, '44'),
+    }),
+    [accentColor, themeMode],
+  );
+  const controlTextStyle = useMemo(
+    () => ({
+      color: themeMode === 'light' ? '#264653' : '#E2E8F0',
+    }),
+    [themeMode],
+  );
+  const sendTextStyle = useMemo(
+    () => ({
+      color: themeMode === 'light' ? accentColor : '#F8FAFC',
+    }),
+    [accentColor, themeMode],
+  );
   const quickTemplatePressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const visibleRunbooks = props.runbooks.slice(0, 4);
 
   const clearQuickTemplatePressTimer = useCallback((): void => {
     if (quickTemplatePressTimerRef.current) {
@@ -1070,89 +1275,153 @@ const ChatComposer = memo(function ChatComposer(props: {
 
   return (
     <View style={[styles.footer, { paddingBottom: props.bottomInset }]}>
-      <View style={styles.composerActionRow}>
-        <Pressable
-          style={styles.contextButton}
-          disabled={!props.currentSessionId}
-          onPress={() => {
-            if (props.currentSessionId) {
-              props.onClearContext(props.currentSessionId);
-            }
-          }}
-        >
-          <Text style={styles.contextButtonText}>{t('chat_clear_context')}</Text>
-        </Pressable>
-        <Pressable
-          style={[styles.contextButton, props.exportBusy && styles.contextButtonDisabled]}
-          onPress={props.onExportMarkdown}
-          disabled={!props.currentSessionId || props.exportBusy}
-        >
-          <Text style={styles.contextButtonText}>Export MD</Text>
-        </Pressable>
-        <Pressable
-          style={[styles.contextButton, props.exportBusy && styles.contextButtonDisabled]}
-          onPress={props.onExportJson}
-          disabled={!props.currentSessionId || props.exportBusy}
-        >
-          <Text style={styles.contextButtonText}>Export JSON</Text>
-        </Pressable>
-      </View>
+      <LiquidGlassPanel style={[styles.composerShell, composerSurfaceStyle]}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.composerActionRow}>
+          <Pressable
+            style={[styles.contextButton, controlSurfaceStyle]}
+            onPress={props.onOpenQuickTemplates}
+            accessibilityRole="button"
+            accessibilityLabel={t('chat_templates_title')}
+          >
+            <Text style={[styles.contextButtonText, controlTextStyle]}>{t('chat_templates_title')}</Text>
+          </Pressable>
+          <Pressable
+            style={[
+              styles.contextButton,
+              controlSurfaceStyle,
+              !props.currentSessionId && styles.contextButtonDisabled,
+            ]}
+            disabled={!props.currentSessionId}
+            onPress={() => {
+              if (props.currentSessionId) {
+                props.onClearContext(props.currentSessionId);
+              }
+            }}
+          >
+            <Text style={[styles.contextButtonText, controlTextStyle]}>{t('chat_clear_context')}</Text>
+          </Pressable>
+          <Pressable
+            style={[
+              styles.contextButton,
+              controlSurfaceStyle,
+              (!props.currentSessionId || props.exportBusy) && styles.contextButtonDisabled,
+            ]}
+            onPress={props.onExportMarkdown}
+            disabled={!props.currentSessionId || props.exportBusy}
+          >
+            <Text style={[styles.contextButtonText, controlTextStyle]}>{t('chat_export_markdown')}</Text>
+          </Pressable>
+          <Pressable
+            style={[
+              styles.contextButton,
+              controlSurfaceStyle,
+              (!props.currentSessionId || props.exportBusy) && styles.contextButtonDisabled,
+            ]}
+            onPress={props.onExportJson}
+            disabled={!props.currentSessionId || props.exportBusy}
+          >
+            <Text style={[styles.contextButtonText, controlTextStyle]}>{t('chat_export_json')}</Text>
+          </Pressable>
+        </ScrollView>
 
-      {props.composerAttachments.length > 0 && (
-        <FlatList
-          horizontal
-          data={props.composerAttachments}
-          keyExtractor={(_, index) => `composer:${index}`}
-          style={styles.attachmentList}
-          contentContainerStyle={styles.attachmentListContent}
-          showsHorizontalScrollIndicator={false}
-          renderItem={renderComposerAttachment}
-        />
-      )}
+        {visibleRunbooks.length > 0 && (
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.composerRunbookRow}>
+            {visibleRunbooks.map((runbook) => (
+              <Pressable
+                key={runbook.id}
+                style={[styles.runbookChip, controlSurfaceStyle]}
+                onPress={() => {
+                  props.onApplyRunbook(runbook);
+                }}
+                accessibilityRole="button"
+                accessibilityLabel={runbook.label}
+              >
+                <Text style={[styles.runbookChipText, controlTextStyle]} numberOfLines={1}>
+                  {runbook.label}
+                </Text>
+              </Pressable>
+            ))}
+            <Pressable
+              style={[styles.runbookChip, controlSurfaceStyle]}
+              onPress={props.onOpenQuickTemplates}
+              accessibilityRole="button"
+              accessibilityLabel={t('common_show')}
+            >
+              <Text style={[styles.runbookChipText, controlTextStyle]}>{t('common_show')}</Text>
+            </Pressable>
+          </ScrollView>
+        )}
 
-      {!!props.voiceStatusText && <Text style={styles.voiceStatusText}>{props.voiceStatusText}</Text>}
-
-      <View style={styles.inputRow}>
-        <Pressable style={styles.sideButton} onPress={props.onPickImage} accessibilityLabel={t('chat_add_image_title')}>
-          <Ionicons name="image-outline" size={20} color={iconColor} />
-        </Pressable>
-
-        <Pressable
-          style={[styles.sideButton, props.isRecording && styles.sideButtonRecording, props.voiceBusy && styles.sideButtonDisabled]}
-          disabled={props.voiceBusy}
-          onPress={props.onVoice}
-          accessibilityLabel={t('chat_voice_setup_title')}
-        >
-          <Ionicons
-            name={props.isRecording ? 'stop-circle-outline' : props.voiceBusy ? 'hourglass-outline' : 'mic-outline'}
-            size={20}
-            color={props.isRecording ? recordingColor : iconColor}
+        {props.composerAttachments.length > 0 && (
+          <FlatList
+            horizontal
+            data={props.composerAttachments}
+            keyExtractor={(_, index) => `composer:${index}`}
+            style={styles.attachmentList}
+            contentContainerStyle={styles.attachmentListContent}
+            showsHorizontalScrollIndicator={false}
+            renderItem={renderComposerAttachment}
           />
-        </Pressable>
+        )}
 
-        <TextInput
-          value={props.draft}
-          onChangeText={props.onChangeDraft}
-          placeholder={t('chat_type_message')}
-          placeholderTextColor="#64748B"
-          style={styles.input}
-          multiline
-          maxLength={8000}
-          onPressIn={handleInputPressIn}
-          onPressOut={clearQuickTemplatePressTimer}
-          onResponderRelease={clearQuickTemplatePressTimer}
-          onResponderTerminate={clearQuickTemplatePressTimer}
-        />
-        <Pressable style={[styles.sendButton, props.sendDisabled && styles.sendButtonDisabled]} onPress={props.onSend} disabled={props.sendDisabled}>
-          <Text style={styles.sendButtonText}>{props.isStreaming ? '...' : t('chat_send')}</Text>
-        </Pressable>
-      </View>
+        {!!props.voiceStatusText && <Text style={[styles.voiceStatusText, controlTextStyle]}>{props.voiceStatusText}</Text>}
+
+        <View style={styles.inputRow}>
+          <Pressable
+            style={[styles.sideButton, controlSurfaceStyle]}
+            onPress={props.onPickImage}
+            accessibilityLabel={t('chat_add_image_title')}
+          >
+            <Ionicons name="image-outline" size={18} color={iconColor} />
+          </Pressable>
+
+          <Pressable
+            style={[
+              styles.sideButton,
+              controlSurfaceStyle,
+              props.isRecording && styles.sideButtonRecording,
+              props.voiceBusy && styles.sideButtonDisabled,
+            ]}
+            disabled={props.voiceBusy}
+            onPress={props.onVoice}
+            accessibilityLabel={t('chat_voice_setup_title')}
+          >
+            <Ionicons
+              name={props.isRecording ? 'stop-circle-outline' : props.voiceBusy ? 'hourglass-outline' : 'mic-outline'}
+              size={18}
+              color={props.isRecording ? recordingColor : iconColor}
+            />
+          </Pressable>
+
+          <TextInput
+            value={props.draft}
+            onChangeText={props.onChangeDraft}
+            placeholder={t('chat_type_message')}
+            placeholderTextColor={themeMode === 'light' ? '#607781' : '#64748B'}
+            style={[styles.input, controlSurfaceStyle]}
+            multiline
+            maxLength={8000}
+            onPressIn={handleInputPressIn}
+            onPressOut={clearQuickTemplatePressTimer}
+            onResponderRelease={clearQuickTemplatePressTimer}
+            onResponderTerminate={clearQuickTemplatePressTimer}
+            accessibilityLabel={t('chat_type_message')}
+          />
+          <Pressable
+            style={[styles.sendButton, sendSurfaceStyle, props.sendDisabled && styles.sendButtonDisabled]}
+            onPress={props.onSend}
+            disabled={props.sendDisabled}
+          >
+            <Text style={[styles.sendButtonText, sendTextStyle]}>{props.isStreaming ? '...' : t('chat_send')}</Text>
+          </Pressable>
+        </View>
+      </LiquidGlassPanel>
     </View>
   );
 });
 
 export function ChatScreen(): JSX.Element {
-  const { t } = useI18n();
+  const { t, language } = useI18n();
   const themeMode = useThemeMode();
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
@@ -1184,6 +1453,9 @@ export function ChatScreen(): JSX.Element {
 
   const connectionStatus = useConnectionStore((state) => state.connectionStatus);
   const activeProfileId = useConnectionStore((state) => state.activeProfileId);
+  const customRunbooks = useChatRunbookStore((state) => state.customRunbooks);
+  const saveRunbook = useChatRunbookStore((state) => state.saveRunbook);
+  const removeRunbook = useChatRunbookStore((state) => state.removeRunbook);
 
   const {
     activeAgentId,
@@ -1244,7 +1516,7 @@ export function ChatScreen(): JSX.Element {
     return Array.from(map.values()).sort((a, b) => a.label.localeCompare(b.label));
   }, [gatewayModels]);
 
-  const sessionSections = useMemo(() => groupSessionsByRecency(sessionList), [sessionList]);
+  const sessionSections = useMemo(() => groupSessionsByRecency(sessionList, t), [sessionList, t]);
 
   const sessionStats = useMemo<Record<string, SessionStats>>(() => {
     if (sessionList.length === 0) {
@@ -1298,9 +1570,14 @@ export function ChatScreen(): JSX.Element {
     () => (currentSessionId ? sessions[currentSessionId] ?? null : null),
     [currentSessionId, sessions],
   );
+  const pricingCurrency = usePricingStore((state) => state.currency);
 
   const currentSessionTokens = currentSession?.totalTokens ?? 0;
   const currentSessionCost = currentSession?.estimatedCost ?? 0;
+  const currentSessionCostLabel = useMemo(
+    () => formatCurrencyAmount(currentSessionCost, pricingCurrency, language),
+    [currentSessionCost, language, pricingCurrency],
+  );
   const currentSessionContextTokens = currentSession?.contextCount ?? currentSessionTokens;
   const currentContextLimit = useMemo(() => {
     const modelLimit = selectedModel
@@ -1309,14 +1586,50 @@ export function ChatScreen(): JSX.Element {
     const fallbackModel = currentSession?.model;
     return modelLimit ?? estimateContextLimit(fallbackModel ?? selectedModel);
   }, [currentSession?.model, modelOptions, selectedModel]);
-  const quickTemplates = useMemo<QuickTemplate[]>(
+  const defaultRunbooks = useMemo<ChatRunbook[]>(
     () => [
-      { id: 'check-logs', label: '检查日志', text: '检查最近 15 分钟错误日志并给出根因与修复建议。' },
-      { id: 'restart-service', label: '重启服务X', text: '重启指定服务并回报重启前后健康状态。' },
-      { id: 'analyze-cost', label: '分析成本', text: '分析本周 token/cost 波动并给出优化建议。' },
-      { id: 'queue-status', label: '队列状态', text: '检查待处理队列并按优先级给出处理计划。' },
+      {
+        id: 'system-check-logs',
+        label: t('chat_runbook_default_check_logs_label'),
+        text: t('chat_runbook_default_check_logs_body'),
+        agentId: null,
+        system: true,
+        createdAt: 0,
+        updatedAt: 0,
+      },
+      {
+        id: 'system-restart-service',
+        label: t('chat_runbook_default_restart_label'),
+        text: t('chat_runbook_default_restart_body'),
+        agentId: null,
+        system: true,
+        createdAt: 0,
+        updatedAt: 0,
+      },
+      {
+        id: 'system-analyze-cost',
+        label: t('chat_runbook_default_cost_label'),
+        text: t('chat_runbook_default_cost_body'),
+        agentId: null,
+        system: true,
+        createdAt: 0,
+        updatedAt: 0,
+      },
+      {
+        id: 'system-queue-status',
+        label: t('chat_runbook_default_queue_label'),
+        text: t('chat_runbook_default_queue_body'),
+        agentId: null,
+        system: true,
+        createdAt: 0,
+        updatedAt: 0,
+      },
     ],
-    [],
+    [t],
+  );
+  const visibleRunbooks = useMemo(
+    () => [...resolveRunbooksForAgent(customRunbooks, activeAgentId), ...defaultRunbooks],
+    [activeAgentId, customRunbooks, defaultRunbooks],
   );
 
   const searchResults = useMemo<MessageSearchResult[]>(() => {
@@ -1364,6 +1677,12 @@ export function ChatScreen(): JSX.Element {
   }, [highlightedMessageId]);
 
   const loadAgents = useCallback(async () => {
+    if (!activeProfileId) {
+      setAgents([]);
+      setGatewayModels([]);
+      return;
+    }
+
     setAgentsLoading(true);
     try {
       const [agentsResult, modelsResult, sessionsResult] = await Promise.allSettled([
@@ -1425,11 +1744,11 @@ export function ChatScreen(): JSX.Element {
     } finally {
       setAgentsLoading(false);
     }
-  }, [mergeGatewaySessions]);
+  }, [activeProfileId, mergeGatewaySessions]);
 
   useEffect(() => {
     void loadAgents();
-  }, [loadAgents]);
+  }, [activeProfileId, loadAgents]);
 
   useEffect(() => {
     if (!activeProfileId) {
@@ -1844,9 +2163,7 @@ export function ChatScreen(): JSX.Element {
   const sendDisabled = (!draft.trim() && composerAttachments.length === 0) || isStreaming || voiceBusy;
   const composerBottomInset = keyboardVisible
     ? Math.max(insets.bottom, 8)
-    : Platform.OS === 'ios'
-      ? Math.max(insets.bottom + 68, 80)
-      : Math.max(insets.bottom + 12, 12);
+    : Math.max(insets.bottom, 12);
   const handleSelectAgent = useCallback(
     (agentId: string) => {
       setActiveAgent(agentId);
@@ -1930,7 +2247,7 @@ export function ChatScreen(): JSX.Element {
   const handleExportSession = useCallback(
     async (format: 'markdown' | 'json') => {
       if (!currentSessionId || !currentSession) {
-        showInlineNotice('Export', 'No active session to export.', 'error');
+        showInlineNotice(t('chat_export_title'), t('chat_export_empty'), 'error');
         return;
       }
 
@@ -1944,26 +2261,61 @@ export function ChatScreen(): JSX.Element {
           format,
         );
         await shareExportedSession(uri);
-        showInlineNotice('Export', format === 'markdown' ? 'Markdown exported.' : 'JSON exported.', 'success');
+        showInlineNotice(
+          t('chat_export_title'),
+          format === 'markdown' ? t('chat_export_markdown_done') : t('chat_export_json_done'),
+          'success',
+        );
       } catch (error: unknown) {
         showInlineNotice(
-          'Export failed',
-          error instanceof Error ? error.message : 'Unable to export this session.',
+          t('chat_export_failed_title'),
+          error instanceof Error ? error.message : t('chat_export_failed_body'),
           'error',
         );
       } finally {
         setExportBusy(false);
       }
     },
-    [currentSession, currentSessionId, messages, showInlineNotice],
+    [currentSession, currentSessionId, messages, showInlineNotice, t],
   );
   const handleOpenQuickTemplates = useCallback(() => {
     setQuickTemplateVisible(true);
   }, []);
-  const handleApplyQuickTemplate = useCallback((template: QuickTemplate) => {
+  const handleApplyQuickTemplate = useCallback((template: ChatRunbook) => {
     setQuickTemplateVisible(false);
     setDraft((prev) => (prev.trim() ? `${prev.trim()} ${template.text}` : template.text));
   }, []);
+  const handleSaveCurrentRunbook = useCallback(() => {
+    const normalizedDraft = draft.trim();
+    if (!normalizedDraft) {
+      showInlineNotice(t('chat_runbook_save_title'), t('chat_runbook_save_empty'), 'error');
+      return;
+    }
+
+    const fallbackLabel = normalizedDraft
+      .split(/\s+/)
+      .slice(0, 3)
+      .join(' ')
+      .slice(0, 24);
+    const created = saveRunbook({
+      label: fallbackLabel || t('chat_runbook_label_fallback'),
+      text: normalizedDraft,
+      agentId: activeAgentId,
+    });
+
+    showInlineNotice(
+      t('chat_runbook_save_title'),
+      `${created.label} · ${activeAgentId ? t('chat_runbook_scope_agent') : t('chat_runbook_scope_global')}`,
+      'success',
+    );
+  }, [activeAgentId, draft, saveRunbook, showInlineNotice, t]);
+  const handleRemoveRunbook = useCallback(
+    (runbookId: string) => {
+      removeRunbook(runbookId);
+      showInlineNotice(t('chat_runbook_remove_title'), t('chat_runbook_remove_body'), 'info');
+    },
+    [removeRunbook, showInlineNotice, t],
+  );
   const voiceStatusText = isRecording
     ? `${t('chat_recording')} ${formatDuration(recordingSeconds)}`
     : voiceBusy
@@ -1981,7 +2333,7 @@ export function ChatScreen(): JSX.Element {
         pendingQueueLength={pendingQueue.length}
         isStreaming={isStreaming}
         tokenCount={currentSessionTokens}
-        estimatedCost={currentSessionCost}
+        estimatedCostLabel={currentSessionCostLabel}
         contextTokens={currentSessionContextTokens}
         contextLimit={currentContextLimit}
         agentsLoading={agentsLoading}
@@ -2040,19 +2392,21 @@ export function ChatScreen(): JSX.Element {
 
       {!isTabletLayout && (
         <View style={styles.mobileSessionBar}>
-          <Pressable
-            style={styles.mobileSessionButton}
-            onPress={() => {
-              setSessionPickerVisible(true);
-            }}
-          >
-            <Text style={styles.mobileSessionButtonLabel}>
-              {t('chat_conversations')} ({sessionList.length})
-            </Text>
-            <Text style={styles.mobileSessionButtonMeta} numberOfLines={1}>
-              {currentSessionTitle ?? t('chat_no_sessions_yet')}
-            </Text>
-          </Pressable>
+          <LiquidGlassPanel style={styles.mobileSessionShell}>
+            <Pressable
+              style={styles.mobileSessionButton}
+              onPress={() => {
+                setSessionPickerVisible(true);
+              }}
+            >
+              <Text style={styles.mobileSessionButtonLabel}>
+                {t('chat_conversations')} ({sessionList.length})
+              </Text>
+              <Text style={styles.mobileSessionButtonMeta} numberOfLines={1}>
+                {currentSessionTitle ?? t('chat_no_sessions_yet')}
+              </Text>
+            </Pressable>
+          </LiquidGlassPanel>
         </View>
       )}
 
@@ -2116,18 +2470,46 @@ export function ChatScreen(): JSX.Element {
           <View style={styles.templateCard}>
             <Text style={styles.templateTitle}>{t('chat_templates_title')}</Text>
             <Text style={styles.templateHint}>{t('chat_templates_hint')}</Text>
-            {quickTemplates.map((template) => (
+            <View style={styles.templateActions}>
               <Pressable
-                key={template.id}
-                style={styles.templateItem}
-                onPress={() => {
-                  handleApplyQuickTemplate(template);
-                }}
+                style={[
+                  styles.templateActionButton,
+                  !draft.trim() && styles.templateActionButtonDisabled,
+                ]}
+                disabled={!draft.trim()}
+                onPress={handleSaveCurrentRunbook}
               >
-                <Text style={styles.templateItemTitle}>{template.label}</Text>
-                <Text style={styles.templateItemText}>{template.text}</Text>
+                <Text style={styles.templateActionButtonText}>{t('chat_runbook_save_action')}</Text>
               </Pressable>
-            ))}
+            </View>
+            <ScrollView style={styles.templateList} contentContainerStyle={styles.templateListContent}>
+              {visibleRunbooks.map((template) => (
+                <View key={template.id} style={styles.templateItem}>
+                  <Pressable
+                    style={styles.templateItemBody}
+                    onPress={() => {
+                      handleApplyQuickTemplate(template);
+                    }}
+                  >
+                    <Text style={styles.templateItemTitle}>{template.label}</Text>
+                    <Text style={styles.templateItemText}>{template.text}</Text>
+                    <Text style={styles.templateItemMeta}>
+                      {template.agentId ? t('chat_runbook_scope_agent') : t('chat_runbook_scope_global')}
+                    </Text>
+                  </Pressable>
+                  {!template.system && (
+                    <Pressable
+                      style={styles.templateDeleteButton}
+                      onPress={() => {
+                        handleRemoveRunbook(template.id);
+                      }}
+                    >
+                      <Ionicons name="trash-outline" size={16} color={mapColorForMode('#FCA5A5', themeMode)} />
+                    </Pressable>
+                  )}
+                </View>
+              ))}
+            </ScrollView>
           </View>
         </View>
       </Modal>
@@ -2225,6 +2607,8 @@ export function ChatScreen(): JSX.Element {
           void handleExportSession('json');
         }}
         onOpenQuickTemplates={handleOpenQuickTemplates}
+        runbooks={visibleRunbooks}
+        onApplyRunbook={handleApplyQuickTemplate}
         exportBusy={exportBusy}
         composerAttachments={composerAttachments}
         onRemoveAttachment={handleRemoveComposerAttachment}
@@ -2261,190 +2645,99 @@ const styles = createAdaptiveStyles({
     gap: 10,
     paddingHorizontal: 12,
   },
-  header: {
+  headerStack: {
     paddingHorizontal: 14,
-    gap: 2,
+    gap: 8,
     marginBottom: 6,
+  },
+  headerCard: {
+    borderRadius: 22,
+    borderWidth: 1,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    gap: 10,
   },
   headerTopRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
   },
-  searchButton: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
+  iconGlassButton: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
     borderWidth: 1,
-    borderColor: '#334155',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#0F172A',
   },
   title: {
     color: '#F8FAFC',
-    fontSize: 24,
+    fontSize: 22,
     fontWeight: '700',
   },
-  subtitle: {
-    color: '#94A3B8',
-    fontSize: 13,
-  },
-  modeHint: {
-    color: '#64748B',
-    fontSize: 13,
-    marginTop: 1,
-  },
-  tokenUsageBadge: {
-    color: '#93C5FD',
-    fontSize: 12,
-    fontWeight: '600',
-    marginTop: 1,
-  },
-  contextBarRow: {
-    marginTop: 4,
-    gap: 4,
-  },
-  contextTrack: {
-    height: 7,
-    borderRadius: 999,
-    backgroundColor: '#1E293B',
-    overflow: 'hidden',
-  },
-  contextFill: {
-    height: '100%',
-    borderRadius: 999,
-    backgroundColor: '#22D3EE',
-  },
-  contextLabel: {
-    color: '#94A3B8',
-    fontSize: 11,
-    fontWeight: '600',
-  },
-  contextLabelWarning: {
-    color: '#FCA5A5',
-  },
-  contextWarningText: {
-    color: '#FCA5A5',
-    fontSize: 11,
-    fontWeight: '600',
-  },
-  agentsRow: {
-    minHeight: 44,
-    justifyContent: 'center',
-  },
-  horizontalList: {
-    paddingHorizontal: 12,
+  statusRail: {
     gap: 8,
     alignItems: 'center',
   },
-  agentChip: {
+  statusPill: {
     borderWidth: 1,
-    borderColor: '#334155',
     borderRadius: 999,
-    paddingHorizontal: 12,
-    minHeight: 44,
+    paddingHorizontal: 10,
+    minHeight: 30,
     justifyContent: 'center',
-    backgroundColor: '#0F172A',
   },
-  agentChipSelected: {
-    borderColor: '#264653',
-    backgroundColor: '#264653',
-  },
-  agentChipText: {
-    color: '#94A3B8',
-    fontSize: 13,
+  statusPillText: {
+    fontSize: 11,
     fontWeight: '600',
   },
-  agentChipTextSelected: {
-    color: '#FFFFFF',
-  },
-  newSessionButton: {
+  controlRailShell: {
+    borderRadius: 20,
     borderWidth: 1,
-    borderColor: '#2563EB',
-    borderRadius: 12,
-    minHeight: 44,
-    paddingHorizontal: 12,
+    minHeight: 48,
     justifyContent: 'center',
   },
-  newSessionText: {
-    color: '#93C5FD',
-    fontSize: 13,
-    fontWeight: '700',
+  controlRailLoading: {
+    minHeight: 46,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  modelToolbar: {
-    gap: 6,
-    marginTop: 8,
-    marginBottom: 6,
-    paddingHorizontal: 12,
-  },
-  modelToolbarLabel: {
-    color: '#94A3B8',
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  modelList: {
+  controlRailContent: {
+    paddingHorizontal: 10,
+    paddingVertical: 8,
     gap: 8,
     alignItems: 'center',
   },
-  modelChip: {
+  controlRailLabel: {
+    color: '#94A3B8',
+    fontSize: 11,
+    fontWeight: '700',
+    marginRight: 2,
+  },
+  controlChip: {
     borderWidth: 1,
-    borderColor: '#334155',
     borderRadius: 999,
-    minHeight: 40,
+    minHeight: 34,
     paddingHorizontal: 12,
     justifyContent: 'center',
-    backgroundColor: '#0F172A',
+    alignItems: 'center',
   },
-  modelChipSelected: {
-    borderColor: '#264653',
-    backgroundColor: '#264653',
-  },
-  modelChipText: {
-    color: '#94A3B8',
+  controlChipText: {
     fontSize: 12,
     fontWeight: '600',
   },
-  modelChipTextSelected: {
-    color: '#FFFFFF',
-  },
-  reasoningRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-    marginTop: 2,
-  },
-  reasoningChip: {
-    borderWidth: 1,
-    borderColor: '#334155',
-    borderRadius: 999,
-    minHeight: 38,
-    paddingHorizontal: 12,
-    justifyContent: 'center',
-    backgroundColor: '#0F172A',
-  },
-  reasoningChipSelected: {
-    borderColor: '#264653',
-    backgroundColor: '#264653',
-  },
-  reasoningChipText: {
-    color: '#94A3B8',
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  reasoningChipTextSelected: {
-    color: '#FFFFFF',
+  newSessionChip: {
+    paddingHorizontal: 14,
   },
   mobileSessionBar: {
     paddingHorizontal: 12,
     marginBottom: 4,
   },
-  mobileSessionButton: {
+  mobileSessionShell: {
+    borderRadius: 18,
     borderWidth: 1,
-    borderColor: '#334155',
-    borderRadius: 12,
-    backgroundColor: '#0B1220',
-    minHeight: 52,
+  },
+  mobileSessionButton: {
+    minHeight: 44,
     justifyContent: 'center',
     gap: 2,
     paddingHorizontal: 12,
@@ -2452,12 +2745,12 @@ const styles = createAdaptiveStyles({
   },
   mobileSessionButtonLabel: {
     color: '#DBEAFE',
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '700',
   },
   mobileSessionButtonMeta: {
     color: '#94A3B8',
-    fontSize: 12,
+    fontSize: 11,
   },
   sessionPanel: {
     marginHorizontal: 0,
@@ -2551,18 +2844,36 @@ const styles = createAdaptiveStyles({
   messagesList: {
     paddingHorizontal: 12,
     paddingTop: 8,
-    paddingBottom: 16,
-    gap: 8,
+    paddingBottom: 20,
+    gap: 12,
     flexGrow: 1,
   },
   messagesListHidden: {
     opacity: 0,
   },
-  messageBubble: {
-    borderRadius: 12,
-    borderWidth: 1,
-    padding: 10,
+  messageGroup: {
+    width: '100%',
     gap: 6,
+  },
+  messageGroupUser: {
+    alignItems: 'flex-end',
+  },
+  messageGroupAssistant: {
+    alignItems: 'flex-start',
+  },
+  messageBubble: {
+    borderRadius: 22,
+    borderWidth: 1,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    gap: 10,
+    maxWidth: '88%',
+  },
+  messageBubbleUser: {
+    borderBottomRightRadius: 10,
+  },
+  messageBubbleAssistant: {
+    borderBottomLeftRadius: 10,
   },
   messageBubbleHighlighted: {
     borderColor: '#FACC15',
@@ -2571,42 +2882,9 @@ const styles = createAdaptiveStyles({
     shadowRadius: 5,
     shadowOffset: { width: 0, height: 0 },
   },
-  userBubble: {
-    borderColor: '#2563EB',
-    backgroundColor: '#0C4A6E',
-  },
-  assistantBubble: {
-    borderColor: '#1E293B',
-    backgroundColor: '#0B1220',
-  },
-  messageHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  messageRole: {
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  userRole: {
-    color: '#F8FAFC',
-  },
-  assistantRole: {
-    color: '#A7F3D0',
-  },
-  messageTime: {
-    color: '#CBD5E1',
-    fontSize: 12,
-  },
-  userMessageTime: {
-    color: '#F8FAFC',
-  },
-  assistantMessageTime: {
-    color: '#94A3B8',
-  },
   messagePlainText: {
     color: '#E2E8F0',
-    fontSize: 15,
+    fontSize: 16,
     lineHeight: 22,
   },
   syntaxBlock: {
@@ -2649,8 +2927,8 @@ const styles = createAdaptiveStyles({
   timelinePanel: {
     borderWidth: 1,
     borderColor: '#1E293B',
-    borderRadius: 8,
-    backgroundColor: '#020617',
+    borderRadius: 14,
+    backgroundColor: '#020617CC',
     paddingHorizontal: 8,
     paddingVertical: 6,
     gap: 6,
@@ -2659,13 +2937,25 @@ const styles = createAdaptiveStyles({
     flexDirection: 'row',
     alignItems: 'center',
   },
+  timelineHeaderCopy: {
+    flex: 1,
+    gap: 2,
+  },
   timelineTitle: {
     color: '#93C5FD',
     fontSize: 11,
     fontWeight: '700',
   },
+  timelineUsage: {
+    color: '#64748B',
+    fontSize: 10,
+    fontWeight: '600',
+  },
   timelineList: {
     gap: 3,
+  },
+  timelineItem: {
+    gap: 2,
   },
   timelineLine: {
     color: '#CBD5E1',
@@ -2673,35 +2963,35 @@ const styles = createAdaptiveStyles({
     lineHeight: 15,
     fontFamily: Platform.select({ ios: 'Menlo', default: 'monospace' }),
   },
+  timelineDetails: {
+    color: '#94A3B8',
+    fontSize: 10,
+    lineHeight: 14,
+    paddingLeft: 14,
+  },
   userMessagePlainText: {
     color: '#F8FAFC',
   },
-  messageFooter: {
+  messageMetaRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
+    flexWrap: 'wrap',
     alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 4,
   },
-  messageFooterMeta: {
-    flex: 1,
-    gap: 4,
+  messageMetaRowUser: {
+    justifyContent: 'flex-end',
   },
-  messageUsageMeta: {
-    color: '#7DD3FC',
-    fontSize: 10,
+  messageMetaRowAssistant: {
+    justifyContent: 'flex-start',
+  },
+  messageMetaText: {
+    fontSize: 11,
     fontWeight: '600',
   },
-  syncStatus: {
-    fontSize: 11,
-    fontWeight: '700',
-  },
-  syncOk: {
-    color: '#34D399',
-  },
-  syncPending: {
-    color: '#FBBF24',
-  },
-  syncFailed: {
-    color: '#F87171',
+  messageUsageMeta: {
+    fontSize: 10,
+    fontWeight: '600',
   },
   retryButton: {
     borderWidth: 1,
@@ -2719,6 +3009,36 @@ const styles = createAdaptiveStyles({
   messageAttachmentRow: {
     flexDirection: 'row',
     gap: 6,
+  },
+  messageCarouselWrap: {
+    gap: 6,
+  },
+  messageCarouselContent: {
+    alignItems: 'center',
+  },
+  messageCarouselPage: {
+    paddingRight: 6,
+  },
+  messageCarouselImage: {
+    height: 180,
+    borderRadius: 10,
+    borderWidth: 1,
+  },
+  messageCarouselDots: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+  },
+  messageCarouselDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 999,
+    backgroundColor: '#334155',
+  },
+  messageCarouselDotActive: {
+    width: 18,
+    backgroundColor: '#93C5FD',
   },
   messageImage: {
     width: 90,
@@ -2753,31 +3073,53 @@ const styles = createAdaptiveStyles({
     fontSize: 14,
   },
   footer: {
-    borderTopWidth: 1,
-    borderTopColor: '#1E293B',
     paddingHorizontal: 12,
-    paddingTop: 8,
+    paddingTop: 6,
     paddingBottom: 10,
-    gap: 8,
-    backgroundColor: '#020617',
+  },
+  composerShell: {
+    borderRadius: 24,
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    gap: 10,
   },
   composerActionRow: {
     flexDirection: 'row',
-    justifyContent: 'flex-end',
     alignItems: 'center',
-    flexWrap: 'wrap',
-    gap: 10,
+    gap: 8,
+  },
+  composerRunbookRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
   },
   contextButton: {
-    alignSelf: 'flex-end',
+    minHeight: 34,
+    borderRadius: 999,
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   contextButtonDisabled: {
     opacity: 0.55,
   },
   contextButtonText: {
-    color: '#93C5FD',
-    fontSize: 14,
+    fontSize: 12,
     fontWeight: '600',
+  },
+  runbookChip: {
+    minHeight: 30,
+    borderRadius: 999,
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    justifyContent: 'center',
+  },
+  runbookChipText: {
+    fontSize: 12,
+    fontWeight: '600',
+    maxWidth: 180,
   },
   attachmentList: {
     maxHeight: 76,
@@ -2786,8 +3128,7 @@ const styles = createAdaptiveStyles({
     gap: 8,
   },
   voiceStatusText: {
-    color: '#93C5FD',
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '600',
   },
   attachmentItem: {
@@ -2824,14 +3165,12 @@ const styles = createAdaptiveStyles({
     alignItems: 'flex-end',
   },
   sideButton: {
-    height: 44,
-    width: 44,
+    height: 40,
+    width: 40,
     borderWidth: 1,
-    borderColor: '#334155',
-    borderRadius: 10,
+    borderRadius: 20,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#0F172A',
   },
   sideButtonRecording: {
     borderColor: '#7F1D1D',
@@ -2842,22 +3181,20 @@ const styles = createAdaptiveStyles({
   },
   input: {
     flex: 1,
-    minHeight: 44,
+    minHeight: 42,
     maxHeight: 120,
     borderWidth: 1,
-    borderColor: '#334155',
-    borderRadius: 10,
-    backgroundColor: '#0F172A',
+    borderRadius: 20,
     color: '#E2E8F0',
-    paddingHorizontal: 10,
-    paddingVertical: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
     fontSize: 16,
   },
   sendButton: {
-    width: 72,
-    height: 44,
-    borderRadius: 10,
-    backgroundColor: '#264653',
+    minWidth: 68,
+    height: 40,
+    borderRadius: 20,
+    borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -3008,14 +3345,47 @@ const styles = createAdaptiveStyles({
     color: '#94A3B8',
     fontSize: 12,
   },
+  templateActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+  },
+  templateActionButton: {
+    minHeight: 34,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#264653',
+    backgroundColor: '#16313A',
+    paddingHorizontal: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  templateActionButtonDisabled: {
+    opacity: 0.45,
+  },
+  templateActionButtonText: {
+    color: '#CAFFF5',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  templateList: {
+    maxHeight: 360,
+  },
+  templateListContent: {
+    gap: 8,
+  },
   templateItem: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
     borderWidth: 1,
     borderColor: '#1E293B',
     borderRadius: 10,
     backgroundColor: '#0F172A',
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    gap: 2,
+    padding: 10,
+    gap: 10,
+  },
+  templateItemBody: {
+    flex: 1,
+    gap: 3,
   },
   templateItemTitle: {
     color: '#E2E8F0',
@@ -3026,6 +3396,21 @@ const styles = createAdaptiveStyles({
     color: '#94A3B8',
     fontSize: 12,
     lineHeight: 16,
+  },
+  templateItemMeta: {
+    color: '#5EEAD4',
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  templateDeleteButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#1F1111',
+    borderWidth: 1,
+    borderColor: '#7F1D1D',
   },
   errorBanner: {
     marginHorizontal: 12,

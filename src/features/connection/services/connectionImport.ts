@@ -86,11 +86,6 @@ function applyQueryParams(url: URL, current: ImportedGatewayConfig): ImportedGat
     next.port = directPort;
   }
 
-  const token = sanitizeValue(url.searchParams.get('token') ?? url.searchParams.get('api_token'));
-  if (token) {
-    next.token = token;
-  }
-
   const name = sanitizeValue(url.searchParams.get('name') ?? url.searchParams.get('profile'));
   if (name) {
     next.name = name;

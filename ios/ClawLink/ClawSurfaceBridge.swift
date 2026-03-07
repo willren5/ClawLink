@@ -4,6 +4,7 @@ import WidgetKit
 import Speech
 import HealthKit
 import CoreSpotlight
+import Network
 import React
 
 private enum ClawSurfaceShared {
@@ -13,6 +14,8 @@ private enum ClawSurfaceShared {
   static let liveActivityEnabledKey = "surface.liveActivityEnabled"
   static let dynamicIslandEnabledKey = "surface.dynamicIslandEnabled"
   static let widgetEnabledKey = "surface.widgetEnabled"
+  static let healthBridgeEnabledKey = "healthBridge.enabled"
+  static let healthBridgeAllowedMetricsKey = "healthBridge.allowedMetrics"
   static let activeProfileClassKey = "surface.activeProfileClass"
   static let supportedSchemaVersion = 1
   static let focusFilterModeKey = "surface.focus.filterMode"
@@ -51,12 +54,29 @@ private func surfaceSuppressionReason(defaults: UserDefaults?) -> String? {
   return nil
 }
 
+private func widgetEnabled(defaults: UserDefaults?) -> Bool {
+  guard let defaults else {
+    return true
+  }
+  if defaults.object(forKey: ClawSurfaceShared.widgetEnabledKey) == nil {
+    return true
+  }
+  return defaults.bool(forKey: ClawSurfaceShared.widgetEnabledKey)
+}
+
 private enum HealthBridgeShared {
   static let availabilityAvailable = "available"
   static let availabilityUnavailable = "unavailable"
   static let statusGranted = "granted"
   static let statusDenied = "denied"
   static let statusUnknown = "unknown"
+}
+
+private enum LocalNetworkShared {
+  static let statusGranted = "granted"
+  static let statusDenied = "denied"
+  static let statusRequested = "requested"
+  static let statusUnavailable = "unavailable"
 }
 
 private enum HealthBridgeMetric: String, CaseIterable {
@@ -75,7 +95,7 @@ private enum HealthBridgeMetric: String, CaseIterable {
     case .exerciseMinutes:
       return HKObjectType.quantityType(forIdentifier: .appleExerciseTime)
     case .standHours:
-      return HKObjectType.quantityType(forIdentifier: .appleStandHour)
+      return HKObjectType.activitySummaryType()
     case .sleepDuration:
       return HKObjectType.categoryType(forIdentifier: .sleepAnalysis)
     }
@@ -93,6 +113,38 @@ private func requestedHealthMetrics(from payload: String) -> [HealthBridgeMetric
 
   let parsed = metrics.compactMap { HealthBridgeMetric(rawValue: $0) }
   return parsed.isEmpty ? HealthBridgeMetric.allCases : parsed
+}
+
+private func storedHealthBridgeMetrics(defaults: UserDefaults?) -> [HealthBridgeMetric] {
+  guard
+    let values = defaults?.array(forKey: ClawSurfaceShared.healthBridgeAllowedMetricsKey) as? [String]
+  else {
+    return []
+  }
+
+  return values.compactMap { HealthBridgeMetric(rawValue: $0) }
+}
+
+private func healthBridgeEnabled(defaults: UserDefaults?) -> Bool {
+  guard let defaults else {
+    return false
+  }
+  if defaults.object(forKey: ClawSurfaceShared.healthBridgeEnabledKey) == nil {
+    return false
+  }
+  return defaults.bool(forKey: ClawSurfaceShared.healthBridgeEnabledKey)
+}
+
+private func requestedLocalNetworkHost(from payload: String) -> String? {
+  guard
+    let data = payload.data(using: .utf8),
+    let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+  else {
+    return nil
+  }
+
+  let rawHost = (json["host"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+  return rawHost.isEmpty ? nil : rawHost
 }
 
 private extension KeyedDecodingContainer {
@@ -338,6 +390,9 @@ struct ClawLinkActivityAttributes: ActivityAttributes {
 final class ClawSurfaceBridge: NSObject {
   private var speechTasks: [UUID: SFSpeechRecognitionTask] = [:]
   private let healthStore = HKHealthStore()
+  private var localNetworkBrowser: NWBrowser?
+  private var localNetworkConnection: NWConnection?
+  private let localNetworkQueue = DispatchQueue(label: "com.fadmediagroup.clawlink.localnetwork")
 
   private func writeStoredSnapshot(_ snapshot: SurfaceSnapshot, defaults: UserDefaults) throws {
     let data = try JSONEncoder().encode(snapshot)
@@ -460,6 +515,83 @@ final class ClawSurfaceBridge: NSObject {
     ]
   }
 
+  private func localNetworkAuthorizationPayload(status: String) -> [String: String] {
+    ["status": status]
+  }
+
+  private func connectLocalNetworkProbe(host: String) {
+    let endpointHost = NWEndpoint.Host(host)
+    let endpointPort = NWEndpoint.Port(rawValue: 80) ?? .http
+    let parameters = NWParameters.tcp
+    parameters.includePeerToPeer = true
+    let connection = NWConnection(host: endpointHost, port: endpointPort, using: parameters)
+    localNetworkConnection = connection
+    connection.stateUpdateHandler = { _ in }
+    connection.start(queue: localNetworkQueue)
+  }
+
+  private func requestLocalNetworkAuthorization(
+    host: String?,
+    resolver: @escaping RCTPromiseResolveBlock,
+    rejecter _: @escaping RCTPromiseRejectBlock
+  ) {
+    if #available(iOS 14.0, *) {
+      localNetworkBrowser?.cancel()
+      localNetworkConnection?.cancel()
+
+      var hasCompleted = false
+      let finish: (String) -> Void = { [weak self] status in
+        guard let self, !hasCompleted else {
+          return
+        }
+
+        hasCompleted = true
+        self.localNetworkBrowser?.cancel()
+        self.localNetworkBrowser = nil
+        self.localNetworkConnection?.cancel()
+        self.localNetworkConnection = nil
+        resolver(self.localNetworkAuthorizationPayload(status: status))
+      }
+      let parameters = NWParameters()
+      parameters.includePeerToPeer = true
+      let browser = NWBrowser(for: .bonjour(type: "_http._tcp", domain: nil), using: parameters)
+      localNetworkBrowser = browser
+
+      browser.stateUpdateHandler = { state in
+        switch state {
+        case .ready:
+          finish(LocalNetworkShared.statusGranted)
+        case .failed(let error):
+          let description = error.localizedDescription.lowercased()
+          let status = description.contains("policy") || description.contains("denied")
+            ? LocalNetworkShared.statusDenied
+            : LocalNetworkShared.statusRequested
+          finish(status)
+        case .waiting(let error):
+          let description = error.localizedDescription.lowercased()
+          if description.contains("policy") || description.contains("denied") {
+            finish(LocalNetworkShared.statusDenied)
+          }
+        default:
+          break
+        }
+      }
+      browser.browseResultsChangedHandler = { _, _ in }
+      browser.start(queue: localNetworkQueue)
+
+      if let host {
+        connectLocalNetworkProbe(host: host)
+      }
+
+      localNetworkQueue.asyncAfter(deadline: .now() + 1.6) {
+        finish(LocalNetworkShared.statusRequested)
+      }
+      return
+    }
+
+    resolver(localNetworkAuthorizationPayload(status: LocalNetworkShared.statusUnavailable))
+  }
+
   private func healthBridgeDateString(from date: Date) -> String {
     let formatter = DateFormatter()
     formatter.calendar = Calendar.autoupdatingCurrent
@@ -549,6 +681,24 @@ final class ClawSurfaceBridge: NSObject {
     healthStore.execute(query)
   }
 
+  private func fetchStandHours(completion: @escaping (Result<Double, Error>) -> Void) {
+    let calendar = Calendar.autoupdatingCurrent
+    let today = calendar.dateComponents([.year, .month, .day], from: Date())
+    let predicate = HKQuery.predicateForActivitySummary(with: today)
+
+    let query = HKActivitySummaryQuery(predicate: predicate) { _, summaries, error in
+      if let error {
+        completion(.failure(error))
+        return
+      }
+
+      let standHours = summaries?.first?.appleStandHours.doubleValue(for: .count()) ?? 0
+      completion(.success(standHours))
+    }
+
+    healthStore.execute(query)
+  }
+
   private func fetchHealthBridgeSummary(
     selectedMetrics: [HealthBridgeMetric],
     completion: @escaping (Result<[String: Any], Error>) -> Void
@@ -624,7 +774,7 @@ final class ClawSurfaceBridge: NSObject {
           group.leave()
         }
       case .standHours:
-        fetchCumulativeQuantity(for: .appleStandHour, unit: .count()) { result in
+        fetchStandHours { result in
           stateQueue.sync {
             switch result {
             case .success(let value):
@@ -738,6 +888,15 @@ final class ClawSurfaceBridge: NSObject {
     }
 
     do {
+      guard widgetEnabled(defaults: defaults) else {
+        defaults.removeObject(forKey: ClawSurfaceShared.snapshotKey)
+        defaults.synchronize()
+        WidgetCenter.shared.reloadTimelines(ofKind: "ClawLinkStatusWidget")
+        WidgetCenter.shared.reloadAllTimelines()
+        resolver(nil)
+        return
+      }
+
       let snapshot = try resolveSnapshot(from: payload, defaults: defaults)
       try writeStoredSnapshot(snapshot, defaults: defaults)
       WidgetCenter.shared.reloadTimelines(ofKind: "ClawLinkStatusWidget")
@@ -756,6 +915,15 @@ final class ClawSurfaceBridge: NSObject {
   ) {
     guard let defaults = UserDefaults(suiteName: ClawSurfaceShared.appGroup) else {
       rejecter("surface_group_unavailable", "App Group storage unavailable.", nil)
+      return
+    }
+
+    guard widgetEnabled(defaults: defaults) else {
+      defaults.removeObject(forKey: ClawSurfaceShared.multiGatewayKey)
+      defaults.synchronize()
+      WidgetCenter.shared.reloadTimelines(ofKind: "ClawLinkMultiGatewayWidget")
+      WidgetCenter.shared.reloadAllTimelines()
+      resolver(nil)
       return
     }
 
@@ -794,6 +962,21 @@ final class ClawSurfaceBridge: NSObject {
 
         if let widgetEnabled = json["widgetEnabled"] as? Bool {
           defaults.set(widgetEnabled, forKey: ClawSurfaceShared.widgetEnabledKey)
+          if !widgetEnabled {
+            defaults.removeObject(forKey: ClawSurfaceShared.snapshotKey)
+            defaults.removeObject(forKey: ClawSurfaceShared.multiGatewayKey)
+          }
+        }
+
+        if let healthBridgeEnabled = json["healthBridgeEnabled"] as? Bool {
+          defaults.set(healthBridgeEnabled, forKey: ClawSurfaceShared.healthBridgeEnabledKey)
+          if !healthBridgeEnabled {
+            defaults.removeObject(forKey: ClawSurfaceShared.healthBridgeAllowedMetricsKey)
+          }
+        }
+
+        if let allowedMetrics = json["healthBridgeAllowedMetrics"] as? [String] {
+          defaults.set(allowedMetrics, forKey: ClawSurfaceShared.healthBridgeAllowedMetricsKey)
         }
 
         if let activeProfileClass = json["activeProfileClass"] as? String {
@@ -1172,10 +1355,19 @@ final class ClawSurfaceBridge: NSObject {
     let requestedMetrics = requestedHealthMetrics(from: payload)
 
     let readTypes = Set(requestedMetrics.compactMap(\.objectType))
-    healthStore.requestAuthorization(toShare: [], read: readTypes) { [weak self] _, error in
+    healthStore.requestAuthorization(toShare: [], read: readTypes) { [weak self] success, error in
       DispatchQueue.main.async {
         if let error = error {
           rejecter("health_bridge_permission_failed", "HealthKit permission request failed.", error)
+          return
+        }
+
+        if !success {
+          rejecter(
+            "health_bridge_permission_denied",
+            "HealthKit permission flow did not complete.",
+            nil
+          )
           return
         }
 
@@ -1185,13 +1377,41 @@ final class ClawSurfaceBridge: NSObject {
   }
 
   @objc
+  func requestLocalNetworkPermission(
+    _ payload: String,
+    resolver: @escaping RCTPromiseResolveBlock,
+    rejecter: @escaping RCTPromiseRejectBlock
+  ) {
+    let host = requestedLocalNetworkHost(from: payload)
+    requestLocalNetworkAuthorization(host: host, resolver: resolver, rejecter: rejecter)
+  }
+
+  @objc
   func getHealthBridgeSummary(
     _ payload: String,
     resolver: @escaping RCTPromiseResolveBlock,
     rejecter: @escaping RCTPromiseRejectBlock
   ) {
+    let defaults = UserDefaults(suiteName: ClawSurfaceShared.appGroup)
+    guard healthBridgeEnabled(defaults: defaults) else {
+      rejecter("health_bridge_disabled", "Health Bridge is disabled.", nil)
+      return
+    }
+
+    let allowedMetrics = storedHealthBridgeMetrics(defaults: defaults)
+    guard !allowedMetrics.isEmpty else {
+      rejecter("health_bridge_metrics_unavailable", "No allowed Health Bridge metrics are configured.", nil)
+      return
+    }
+
     let requestedMetrics = requestedHealthMetrics(from: payload)
-    fetchHealthBridgeSummary(selectedMetrics: requestedMetrics) { result in
+    let effectiveMetrics = requestedMetrics.filter { allowedMetrics.contains($0) }
+    guard !effectiveMetrics.isEmpty else {
+      rejecter("health_bridge_metrics_forbidden", "Requested Health Bridge metrics are not permitted.", nil)
+      return
+    }
+
+    fetchHealthBridgeSummary(selectedMetrics: effectiveMetrics) { result in
       switch result {
       case .success(let payload):
         resolver(payload)

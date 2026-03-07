@@ -32,6 +32,10 @@ function NativeTabsLayout(): JSX.Element {
         <NativeTabs.Trigger.Icon sf={{ default: 'speedometer', selected: 'speedometer' }} />
         <NativeTabs.Trigger.Label hidden>Dashboard</NativeTabs.Trigger.Label>
       </NativeTabs.Trigger>
+      <NativeTabs.Trigger name="inbox">
+        <NativeTabs.Trigger.Icon sf={{ default: 'tray', selected: 'tray.fill' }} />
+        <NativeTabs.Trigger.Label hidden>Inbox</NativeTabs.Trigger.Label>
+      </NativeTabs.Trigger>
       <NativeTabs.Trigger name="agents">
         <NativeTabs.Trigger.Icon sf={{ default: 'wrench.and.screwdriver', selected: 'wrench.and.screwdriver.fill' }} />
         <NativeTabs.Trigger.Label hidden>Agents</NativeTabs.Trigger.Label>
@@ -43,10 +47,6 @@ function NativeTabsLayout(): JSX.Element {
       <NativeTabs.Trigger name="chat">
         <NativeTabs.Trigger.Icon sf={{ default: 'bubble.left.and.bubble.right', selected: 'bubble.left.and.bubble.right.fill' }} />
         <NativeTabs.Trigger.Label hidden>Chat</NativeTabs.Trigger.Label>
-      </NativeTabs.Trigger>
-      <NativeTabs.Trigger name="settings">
-        <NativeTabs.Trigger.Icon sf={{ default: 'slider.horizontal.3', selected: 'slider.horizontal.3' }} />
-        <NativeTabs.Trigger.Label hidden>Settings</NativeTabs.Trigger.Label>
       </NativeTabs.Trigger>
     </NativeTabs>
   );
@@ -109,6 +109,13 @@ function JsTabsLayout(): JSX.Element {
         }}
       />
       <Tabs.Screen
+        name="inbox"
+        options={{
+          title: t('tabs_inbox'),
+          tabBarIcon: ({ color, size }) => <Ionicons name="file-tray-full-outline" color={color} size={size} />,
+        }}
+      />
+      <Tabs.Screen
         name="agents"
         options={{
           title: t('tabs_agents'),
@@ -127,13 +134,6 @@ function JsTabsLayout(): JSX.Element {
         options={{
           title: t('tabs_chat'),
           tabBarIcon: ({ color, size }) => <Ionicons name="chatbubbles-outline" color={color} size={size} />,
-        }}
-      />
-      <Tabs.Screen
-        name="settings"
-        options={{
-          title: t('tabs_settings'),
-          tabBarIcon: ({ color, size }) => <Ionicons name="settings-outline" color={color} size={size} />,
         }}
       />
     </Tabs>

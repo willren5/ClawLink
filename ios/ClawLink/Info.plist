@@ -49,6 +49,10 @@
 	<string>Allow $(PRODUCT_NAME) to access your camera</string>
 	<key>NSFaceIDUsageDescription</key>
 	<string>Allow $(PRODUCT_NAME) to use Face ID</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_http._tcp</string>
+	</array>
 	<key>NSHealthShareUsageDescription</key>
 	<string>Allow $(PRODUCT_NAME) to read selected Apple Health metrics for the optional Health Bridge.</string>
 	<key>NSLocalNetworkUsageDescription</key>

@@ -58,9 +58,9 @@ private func readShortcutIntentQueue() -> [ClawShortcutIntentRequest] {
   return (try? JSONDecoder().decode([ClawShortcutIntentRequest].self, from: data)) ?? []
 }
 
-func appendShortcutIntentRequest(_ request: ClawShortcutIntentRequest) {
+func appendShortcutIntentRequest(_ request: ClawShortcutIntentRequest) -> Bool {
   guard let defaults = intentDefaults() else {
-    return
+    return false
   }
 
   let queue = readShortcutIntentQueue() + [request]
@@ -68,7 +68,10 @@ func appendShortcutIntentRequest(_ request: ClawShortcutIntentRequest) {
      let payload = String(data: data, encoding: .utf8) {
     defaults.set(payload, forKey: ClawIntentShared.shortcutQueueKey)
     defaults.synchronize()
+    return true
   }
+
+  return false
 }
 
 func consumeShortcutIntentRequests() -> [ClawShortcutIntentRequest] {

@@ -1,12 +1,13 @@
 import 'react-native-url-polyfill/auto';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AppState, Appearance, Linking, NativeModules, Platform, Pressable, Text, View, type AppStateStatus } from 'react-native';
 import * as Notifications from 'expo-notifications';
 import { Stack, usePathname, useRouter } from 'expo-router';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
+import { z } from 'zod';
 
 import { getAgents, restartAgent } from '../src/lib/api';
 import { useAgentsRuntimeStore } from '../src/features/agents/store/agentsRuntimeStore';
@@ -28,15 +29,28 @@ import { aggregateSystemSnapshot, subscribeSnapshotChanges } from '../src/featur
 import { startSpotlightIndexing } from '../src/features/system-surfaces/services/spotlightIndexer';
 import { useAppPreferencesStore } from '../src/features/settings/store/preferencesStore';
 import { useI18n } from '../src/lib/i18n';
+import { isHiddenDebugProfileEnabled, resolveExperimentalFeatureFlags } from '../src/lib/features/featureFlags';
+import { getString, removeItem, setString } from '../src/lib/mmkv/storage';
+import { initSentry, Sentry } from '../src/lib/monitoring/sentry';
+import { authenticateAction } from '../src/lib/security/biometric';
+import { HIDDEN_DEBUG_TOKEN } from '../src/features/connection/debugProfile';
 import { createAdaptiveStyles, mapColorForMode, useThemeMode } from '../src/theme/adaptiveStyles';
 
-type DeepLinkRoute = '/(tabs)/chat' | '/(tabs)/monitor' | '/(tabs)/agents' | '/(tabs)/dashboard' | '/connection';
+type DeepLinkRoute =
+  | '/(tabs)/chat'
+  | '/(tabs)/monitor'
+  | '/(tabs)/agents'
+  | '/(tabs)/dashboard'
+  | '/(tabs)/inbox'
+  | '/connection';
 
 const DEEP_LINK_ROUTE_MAP: Record<string, DeepLinkRoute> = {
   chat: '/(tabs)/chat',
   monitor: '/(tabs)/monitor',
   agents: '/(tabs)/agents',
   dashboard: '/(tabs)/dashboard',
+  inbox: '/(tabs)/inbox',
+  incidents: '/(tabs)/inbox',
   connect: '/connection',
   connection: '/connection',
 };
@@ -50,11 +64,135 @@ interface ClawSurfaceBridgeModule {
 const nativeSurfaceBridge = NativeModules.ClawSurfaceBridge as ClawSurfaceBridgeModule | undefined;
 
 interface PendingShortcutCommand {
-  id?: string;
+  id: string;
   kind: 'restart_agent' | 'send_message';
   agentId?: string | null;
   message?: string | null;
-  createdAt?: number;
+  createdAt: number;
+}
+
+interface ShortcutBacklogEntry extends PendingShortcutCommand {
+  attemptCount: number;
+  nextAttemptAt: number;
+}
+
+const SHORTCUT_BACKLOG_STORAGE_KEY = 'shortcut-intents:backlog:v1';
+const SHORTCUT_AUTH_RETRY_DELAY_MS = 60_000;
+const SHORTCUT_FAILURE_BASE_DELAY_MS = 15_000;
+const SHORTCUT_FAILURE_MAX_DELAY_MS = 5 * 60_000;
+const PROMO_DEMO_ENABLED = __DEV__ && process.env.EXPO_PUBLIC_PROMO_DEMO === '1';
+const HIDDEN_DEBUG_PROFILE_ENABLED = isHiddenDebugProfileEnabled();
+
+initSentry();
+
+const PendingShortcutCommandSchema = z.object({
+  id: z.string().trim().min(1).optional(),
+  kind: z.enum(['restart_agent', 'send_message']),
+  agentId: z.string().optional().nullable(),
+  message: z.string().optional().nullable(),
+  createdAt: z.number().finite().optional(),
+});
+
+const PendingShortcutCommandPayloadSchema = z
+  .union([PendingShortcutCommandSchema, z.array(PendingShortcutCommandSchema)])
+  .transform((value) => (Array.isArray(value) ? value : [value]));
+
+const ShortcutBacklogEntrySchema = PendingShortcutCommandSchema.extend({
+  id: z.string().trim().min(1),
+  createdAt: z.number().finite(),
+  attemptCount: z.number().int().nonnegative(),
+  nextAttemptAt: z.number().finite(),
+});
+
+const ShortcutBacklogSchema = z.array(ShortcutBacklogEntrySchema);
+
+function normalizeShortcutCommandId(command: z.infer<typeof PendingShortcutCommandSchema>): string {
+  if (command.id?.trim()) {
+    return command.id.trim();
+  }
+
+  const createdAt = typeof command.createdAt === 'number' && Number.isFinite(command.createdAt) ? command.createdAt : 0;
+  return [
+    command.kind,
+    command.agentId?.trim() ?? '',
+    command.message?.trim() ?? '',
+    createdAt,
+  ].join(':');
+}
+
+function normalizePendingShortcutCommand(
+  command: z.infer<typeof PendingShortcutCommandSchema>,
+): PendingShortcutCommand {
+  return {
+    id: normalizeShortcutCommandId(command),
+    kind: command.kind,
+    agentId: command.agentId?.trim() || null,
+    message: command.message?.trim() || null,
+    createdAt: typeof command.createdAt === 'number' && Number.isFinite(command.createdAt) ? command.createdAt : Date.now(),
+  };
+}
+
+function readShortcutBacklog(): ShortcutBacklogEntry[] {
+  const raw = getString(SHORTCUT_BACKLOG_STORAGE_KEY);
+  if (!raw) {
+    return [];
+  }
+
+  try {
+    return ShortcutBacklogSchema.parse(JSON.parse(raw));
+  } catch {
+    removeItem(SHORTCUT_BACKLOG_STORAGE_KEY);
+    return [];
+  }
+}
+
+function persistShortcutBacklog(backlog: ShortcutBacklogEntry[]): void {
+  if (backlog.length === 0) {
+    removeItem(SHORTCUT_BACKLOG_STORAGE_KEY);
+    return;
+  }
+
+  setString(SHORTCUT_BACKLOG_STORAGE_KEY, JSON.stringify(backlog));
+}
+
+function mergeShortcutBacklog(
+  backlog: ShortcutBacklogEntry[],
+  commands: PendingShortcutCommand[],
+): ShortcutBacklogEntry[] {
+  if (commands.length === 0) {
+    return backlog;
+  }
+
+  const seen = new Set(backlog.map((entry) => entry.id));
+  const merged = [...backlog];
+
+  for (const command of commands) {
+    if (seen.has(command.id)) {
+      continue;
+    }
+
+    seen.add(command.id);
+    merged.push({
+      ...command,
+      attemptCount: 0,
+      nextAttemptAt: 0,
+    });
+  }
+
+  return merged.sort((a, b) => a.createdAt - b.createdAt);
+}
+
+function parseShortcutCommandPayload(payload: string): PendingShortcutCommand[] {
+  const parsed = PendingShortcutCommandPayloadSchema.parse(JSON.parse(payload));
+  return parsed.map((command) => normalizePendingShortcutCommand(command));
+}
+
+function nextShortcutRetryAt(attemptCount: number, delayMs?: number): number {
+  if (typeof delayMs === 'number' && delayMs > 0) {
+    return Date.now() + delayMs;
+  }
+
+  return Date.now() + Math.min(SHORTCUT_FAILURE_MAX_DELAY_MS, SHORTCUT_FAILURE_BASE_DELAY_MS * 2 ** attemptCount);
 }
 
 function resolveDeepLinkRoute(url: string): DeepLinkRoute | null {
@@ -90,9 +228,6 @@ function extractConnectionRouteParams(url: string): Record<string, string> | nul
   }
   if (typeof imported.port === 'number') {
     params.port = String(imported.port);
-  }
-  if (imported.token) {
-    params.token = imported.token;
   }
   if (typeof imported.tls === 'boolean') {
     params.tls = imported.tls ? 'true' : 'false';
@@ -137,14 +272,21 @@ function RootNavigation(): JSX.Element {
   const [hydrationTimedOut, setHydrationTimedOut] = useState(false);
   const isHydrated = useConnectionStore((state) => state.isHydrated);
   const activeProfileId = useConnectionStore((state) => state.activeProfileId);
+  const connectAndSaveProfile = useConnectionStore((state) => state.connectAndSaveProfile);
   const isPermissionsHydrated = usePermissionsStore((state) => state.isHydrated);
   const hasRequiredPermissions = usePermissionsStore((state) => state.hasRequiredPermissions());
   const refreshPermissions = usePermissionsStore((state) => state.refreshPermissions);
   const themePreference = useAppPreferencesStore((state) => state.themePreference);
   const notificationLanguage = useAppPreferencesStore((state) => state.language);
+  const featureOverrides = useAppPreferencesStore((state) => state.featureOverrides);
   const navBackground = mapColorForMode('#020617', themeMode);
   const navText = mapColorForMode('#E2E8F0', themeMode);
   const storesReady = (isHydrated && isPermissionsHydrated) || hydrationTimedOut;
+  const promoBootstrapStartedRef = useRef(false);
+  const experimentalFeatures = useMemo(
+    () => resolveExperimentalFeatureFlags(featureOverrides),
+    [featureOverrides],
+  );
 
   useConnectionHeartbeat();
 
@@ -201,7 +343,7 @@ function RootNavigation(): JSX.Element {
       } catch {
         // Ignore malformed deep-link query params.
       }
-      router.replace(route);
+      router.replace(route as Parameters<typeof router.replace>[0]);
     },
     [activeProfileId, hasRequiredPermissions, router],
   );
@@ -229,6 +371,40 @@ function RootNavigation(): JSX.Element {
       // Keep startup resilient if permission APIs fail temporarily.
     });
   }, [isPermissionsHydrated, refreshPermissions]);
+
+  useEffect(() => {
+    if (!PROMO_DEMO_ENABLED || !HIDDEN_DEBUG_PROFILE_ENABLED || !storesReady || promoBootstrapStartedRef.current) {
+      return;
+    }
+
+    promoBootstrapStartedRef.current = true;
+    usePermissionsStore.setState({
+      permissions: {
+        camera: 'granted',
+        photos: 'granted',
+        microphone: 'granted',
+        localNetwork: 'granted',
+      },
+    });
+    useAppPreferencesStore.setState({
+      language: 'zh',
+      themePreference: 'dark',
+    });
+
+    void connectAndSaveProfile({
+      host: '127.0.0.1',
+      port: 18789,
+      token: HIDDEN_DEBUG_TOKEN,
+      tls: false,
+      name: 'Promo Demo Gateway',
+    })
+      .then(() => {
+        router.replace('/(tabs)/dashboard');
+      })
+      .catch(() => {
+        promoBootstrapStartedRef.current = false;
+      });
+  }, [connectAndSaveProfile, router, storesReady]);
 
   useEffect(() => {
     if (!storesReady) {
@@ -383,65 +559,65 @@ function RootNavigation(): JSX.Element {
       !storesReady ||
       !hasRequiredPermissions ||
       !activeProfileId ||
+      !experimentalFeatures.shortcutIntents ||
       Platform.OS !== 'ios' ||
       !nativeSurfaceBridge?.consumePendingShortcutCommand
     ) {
       return;
     }
 
-    const executeShortcutCommand = async (payload: string | null): Promise<void> => {
-      if (!payload) {
-        return;
-      }
-
-      let commands: PendingShortcutCommand[] = [];
-      try {
-        const parsed = JSON.parse(payload) as PendingShortcutCommand | PendingShortcutCommand[];
-        commands = Array.isArray(parsed) ? parsed : [parsed];
-      } catch {
-        return;
-      }
-
-      for (const command of commands) {
-        if (!command?.kind) {
-          continue;
+    const executeShortcutCommand = async (
+      command: ShortcutBacklogEntry,
+    ): Promise<{ status: 'success' | 'retry' | 'drop'; retryDelayMs?: number }> => {
+      if (command.kind === 'restart_agent') {
+        const agentId = command.agentId?.trim();
+        if (!agentId) {
+          return { status: 'drop' };
         }
 
-        if (command.kind === 'restart_agent') {
-          const agentId = command.agentId?.trim();
-          if (!agentId) {
-            continue;
-          }
+        const allowed = await authenticateAction('Restart agent process?');
+        if (!allowed) {
+          return {
+            status: 'retry',
+            retryDelayMs: SHORTCUT_AUTH_RETRY_DELAY_MS,
+          };
+        }
 
-          router.replace('/(tabs)/agents');
-          await restartAgent(agentId)
-            .then(async () => {
-              const agents = await getAgents();
-              useAgentsRuntimeStore.getState().hydrateAgents(agents.agents);
+        router.replace('/(tabs)/agents');
+        try {
+          await restartAgent(agentId);
+          await getAgents()
+            .then((response) => {
+              useAgentsRuntimeStore.getState().hydrateAgents(response.agents);
             })
             .catch(() => undefined);
-          continue;
+          return { status: 'success' };
+        } catch {
+          return { status: 'retry' };
         }
+      }
 
-        if (command.kind === 'send_message') {
-          const agentId = command.agentId?.trim();
-          const message = command.message?.trim();
-          if (!agentId || !message) {
-            continue;
-          }
+      const agentId = command.agentId?.trim();
+      const message = command.message?.trim();
+      if (!agentId || !message) {
+        return { status: 'drop' };
+      }
 
-          const chatStore = useChatStore.getState();
-          const sessionId = chatStore.createSession(agentId);
-          chatStore.setActiveAgent(agentId);
-          chatStore.setActiveSession(sessionId);
-          chatStore.ensureSessionMessagesLoaded(sessionId);
-          router.replace('/(tabs)/chat');
-          await chatStore.sendMessage({
-            agentId,
-            sessionId,
-            content: message,
-          }).catch(() => undefined);
-        }
+      const chatStore = useChatStore.getState();
+      const sessionId = chatStore.createSession(agentId);
+      chatStore.setActiveAgent(agentId);
+      chatStore.setActiveSession(sessionId);
+      chatStore.ensureSessionMessagesLoaded(sessionId);
+      router.replace('/(tabs)/chat');
+      try {
+        await chatStore.sendMessage({
+          agentId,
+          sessionId,
+          content: message,
+        });
+        return { status: 'success' };
+      } catch {
+        return { status: 'retry' };
       }
     };
 
@@ -453,9 +629,42 @@ function RootNavigation(): JSX.Element {
       }
 
       draining = true;
-      void nativeSurfaceBridge
-        .consumePendingShortcutCommand?.()
-        .then((payload) => executeShortcutCommand(payload))
+      void (async () => {
+        let backlog = readShortcutBacklog();
+
+        try {
+          const payload = await nativeSurfaceBridge.consumePendingShortcutCommand?.();
+          if (payload) {
+            const commands = parseShortcutCommandPayload(payload);
+            backlog = mergeShortcutBacklog(backlog, commands);
+            persistShortcutBacklog(backlog);
+          }
+        } catch {
+          // Keep existing backlog for later retry.
+        }
+
+        const now = Date.now();
+        const nextIndex = backlog.findIndex((entry) => entry.nextAttemptAt <= now);
+        if (nextIndex === -1) {
+          return;
+        }
+
+        const entry = backlog[nextIndex];
+        const result = await executeShortcutCommand(entry);
+
+        if (result.status === 'success' || result.status === 'drop') {
+          backlog.splice(nextIndex, 1);
+          persistShortcutBacklog(backlog);
+          return;
+        }
+
+        backlog[nextIndex] = {
+          ...entry,
+          attemptCount: entry.attemptCount + 1,
+          nextAttemptAt: nextShortcutRetryAt(entry.attemptCount, result.retryDelayMs),
+        };
+        persistShortcutBacklog(backlog);
+      })()
         .catch(() => undefined)
         .finally(() => {
           draining = false;
@@ -468,7 +677,7 @@ function RootNavigation(): JSX.Element {
     return () => {
       clearInterval(timer);
     };
-  }, [activeProfileId, hasRequiredPermissions, router, storesReady]);
+  }, [activeProfileId, experimentalFeatures.shortcutIntents, hasRequiredPermissions, router, storesReady]);
 
   useEffect(() => {
     if (!storesReady) {
@@ -513,15 +722,34 @@ function RootNavigation(): JSX.Element {
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
         <Stack.Screen name="permissions" options={{ headerShown: false }} />
         <Stack.Screen name="connection" options={{ headerShown: false }} />
-        <Stack.Screen name="settings/gateways" options={{ title: t('settings_gateway_list_title') }} />
-        <Stack.Screen name="settings/health-bridge" options={{ title: t('settings_health_bridge_title') }} />
+        <Stack.Screen
+          name="settings/index"
+          options={{
+            title: t('tabs_settings'),
+            headerBackButtonDisplayMode: 'minimal',
+          }}
+        />
+        <Stack.Screen
+          name="settings/gateways"
+          options={{
+            title: t('settings_gateway_list_title'),
+            headerBackButtonDisplayMode: 'minimal',
+          }}
+        />
+        <Stack.Screen
+          name="settings/health-bridge"
+          options={{
+            title: t('settings_health_bridge_title'),
+            headerBackButtonDisplayMode: 'minimal',
+          }}
+        />
       </Stack>
       <DisconnectBanner />
     </>
   );
 }
 
-export default function RootLayout(): JSX.Element {
+function RootLayout(): JSX.Element {
   return (
     <GestureHandlerRootView style={styles.root}>
       <SafeAreaProvider>
@@ -530,6 +758,8 @@ export default function RootLayout(): JSX.Element {
     </GestureHandlerRootView>
   );
 }
+
+export default Sentry.wrap(RootLayout);
 
 const styles = createAdaptiveStyles({
   root: {

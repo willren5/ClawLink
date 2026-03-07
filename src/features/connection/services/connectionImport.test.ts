@@ -17,7 +17,7 @@ test('parses bootstrap terminal output into gateway fields', () => {
   });
 });
 
-test('parses clawlink connect deep links', () => {
+test('drops token from clawlink connect deep links', () => {
   const result = parseGatewayImport(
     'clawlink://connect?host=gateway.local&port=443&token=abc123&tls=true&name=Office',
   );
@@ -25,7 +25,6 @@ test('parses clawlink connect deep links', () => {
   assert.deepEqual(result, {
     host: 'gateway.local',
     port: 443,
-    token: 'abc123',
     tls: true,
     name: 'Office',
   });

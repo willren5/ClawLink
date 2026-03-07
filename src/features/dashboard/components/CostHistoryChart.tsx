@@ -12,6 +12,7 @@ interface CostHistoryPoint {
 interface CostHistoryChartProps {
   points: CostHistoryPoint[];
   themeMode: ThemeMode;
+  totalCostLabel?: string;
 }
 
 const CHART_HEIGHT = 176;
@@ -95,7 +96,7 @@ export const CostHistoryChart = memo(function CostHistoryChart(props: CostHistor
       </Svg>
       <View style={styles.metaRow}>
         <Text style={styles.metaText}>{firstLabel}</Text>
-        <Text style={styles.metaText}>${totalCost.toFixed(2)}</Text>
+        <Text style={styles.metaText}>{props.totalCostLabel ?? totalCost.toFixed(2)}</Text>
         <Text style={styles.metaText}>{lastLabel}</Text>
       </View>
     </View>

@@ -16,13 +16,22 @@ import * as FileSystem from 'expo-file-system/legacy';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { resolveExperimentalFeatureFlags, type ExperimentalFeatureKey } from '../../../lib/features/featureFlags';
 import { useI18n } from '../../../lib/i18n';
 import { createAdaptiveStyles, mapColorForMode, useAccentColor, useThemeMode } from '../../../theme/adaptiveStyles';
 import { useConnectionStore } from '../../connection/store/connectionStore';
 import { getVisibleGatewayProfiles, HIDDEN_DEBUG_PROFILE_ID } from '../../connection/debugProfile';
 import { useDashboardStore } from '../../dashboard/store/dashboardStore';
 import { useChatStore } from '../../chat/store/chatStore';
+import { clearAllPersistedSessionMessages } from '../../chat/store/sessionMessagesStorage';
 import { useAuditLogStore } from '../../security/store/auditLogStore';
+import {
+  SUPPORTED_PRICING_CURRENCIES,
+  evaluateDailyBudget,
+  formatCurrencyAmount,
+  pricingCurrencyLabel,
+  usePricingStore,
+} from '../store/pricingStore';
 import {
   DEFAULT_ACCENT_COLOR,
   DEFAULT_DASHBOARD_SECTION_ORDER,
@@ -31,7 +40,12 @@ import {
   type ThemePreference,
   useAppPreferencesStore,
 } from '../store/preferencesStore';
-import { buildSystemSurfaceSnapshot, publishSystemSurfaces, stopSystemLiveActivity } from '../../system-surfaces/services/surfaceBridge';
+import {
+  buildSystemSurfaceSnapshot,
+  publishSystemSurfaces,
+  stopSystemLiveActivity,
+  syncSurfacePreferences,
+} from '../../system-surfaces/services/surfaceBridge';
 import { buildDiagnosticsPayload } from '../services/diagnosticsExport';
 
 const ACCENT_PRESETS = ['#264653', '#2A9D8F', '#3B82F6', '#E76F51', '#B23A48', '#6D4C41'] as const;
@@ -64,12 +78,19 @@ export function SettingsScreen(): JSX.Element {
   const setAccentColor = useAppPreferencesStore((state) => state.setAccentColor);
   const resetAppearance = useAppPreferencesStore((state) => state.resetAppearance);
   const resetAllPreferences = useAppPreferencesStore((state) => state.resetAllPreferences);
+  const persistChatTranscripts = useAppPreferencesStore((state) => state.persistChatTranscripts);
   const liveActivityEnabled = useAppPreferencesStore((state) => state.liveActivityEnabled);
   const dynamicIslandEnabled = useAppPreferencesStore((state) => state.dynamicIslandEnabled);
   const widgetEnabled = useAppPreferencesStore((state) => state.widgetEnabled);
+  const spotlightEnabled = useAppPreferencesStore((state) => state.spotlightEnabled);
+  const featureOverrides = useAppPreferencesStore((state) => state.featureOverrides);
   const setLiveActivityEnabled = useAppPreferencesStore((state) => state.setLiveActivityEnabled);
   const setDynamicIslandEnabled = useAppPreferencesStore((state) => state.setDynamicIslandEnabled);
   const setWidgetEnabled = useAppPreferencesStore((state) => state.setWidgetEnabled);
+  const setSpotlightEnabled = useAppPreferencesStore((state) => state.setSpotlightEnabled);
+  const setPersistChatTranscripts = useAppPreferencesStore((state) => state.setPersistChatTranscripts);
+  const setExperimentalFeatureEnabled = useAppPreferencesStore((state) => state.setExperimentalFeatureEnabled);
+  const resetExperimentalFeatures = useAppPreferencesStore((state) => state.resetExperimentalFeatures);
   const dashboardSectionOrder = useAppPreferencesStore((state) => state.dashboardSectionOrder);
   const moveDashboardSection = useAppPreferencesStore((state) => state.moveDashboardSection);
   const resetDashboardSectionOrder = useAppPreferencesStore((state) => state.resetDashboardSectionOrder);
@@ -79,17 +100,42 @@ export function SettingsScreen(): JSX.Element {
   const switchGatewayProfile = useConnectionStore((state) => state.switchGatewayProfile);
   const auditEntries = useAuditLogStore((state) => state.entries);
   const clearAuditEntries = useAuditLogStore((state) => state.clearEntries);
+  const pricingCurrency = usePricingStore((state) => state.currency);
+  const pricing = usePricingStore((state) => state.pricing);
+  const dailyBudget = usePricingStore((state) => state.dailyBudget);
+  const setPricingCurrency = usePricingStore((state) => state.setCurrency);
+  const setDailyBudget = usePricingStore((state) => state.setDailyBudget);
+  const upsertModelPricing = usePricingStore((state) => state.upsertModelPricing);
+  const removeModelPricing = usePricingStore((state) => state.removeModelPricing);
+  const dashboardEstimatedCostToday = useDashboardStore((state) => state.snapshot.cards.estimatedCostToday);
+  const recalculateDashboardCost = useDashboardStore((state) => state.recalculateCostEstimate);
+  const recalculateChatSessionCosts = useChatStore((state) => state.recalculateSessionCosts);
 
   const [accentInput, setAccentInput] = useState(accentColor);
   const [surfacePublishing, setSurfacePublishing] = useState(false);
   const [debugExporting, setDebugExporting] = useState(false);
   const [switchingGatewayId, setSwitchingGatewayId] = useState<string | null>(null);
+  const [dailyBudgetInput, setDailyBudgetInput] = useState(dailyBudget !== null ? String(dailyBudget) : '');
+  const [pricingModelInput, setPricingModelInput] = useState('');
+  const [pricingInputPrice, setPricingInputPrice] = useState('');
+  const [pricingOutputPrice, setPricingOutputPrice] = useState('');
+  const [editingPricingKey, setEditingPricingKey] = useState<string | null>(null);
 
   const gatewayProfiles = useMemo(() => getVisibleGatewayProfiles(allGatewayProfiles), [allGatewayProfiles]);
 
   useEffect(() => {
     setAccentInput(accentColor);
   }, [accentColor]);
+
+  useEffect(() => {
+    setDailyBudgetInput(dailyBudget !== null ? String(dailyBudget) : '');
+  }, [dailyBudget]);
+
+  useEffect(() => {
+    void syncSurfacePreferences().catch(() => {
+      // Preference syncing is best effort; manual refresh remains available.
+    });
+  }, [dynamicIslandEnabled, liveActivityEnabled, widgetEnabled]);
 
   const sectionLabelByKey = useMemo<Record<DashboardSectionKey, string>>(
     () => ({
@@ -106,6 +152,72 @@ export function SettingsScreen(): JSX.Element {
   const orderedSections = useMemo(
     () => sanitizeSectionOrder(dashboardSectionOrder.length ? dashboardSectionOrder : [...SECTION_KEYS]),
     [dashboardSectionOrder],
+  );
+  const experimentalFeatures = useMemo(
+    () => resolveExperimentalFeatureFlags(featureOverrides),
+    [featureOverrides],
+  );
+  const experimentalFeatureRows = useMemo<Array<{ key: ExperimentalFeatureKey; label: string; hint: string }>>(
+    () => [
+      {
+        key: 'healthBridge',
+        label: 'Health Bridge',
+        hint:
+          language === 'zh'
+            ? '控制 Apple Health 数据桥接页面与原生同步。'
+            : 'Controls the Apple Health bridge UI and native sync path.',
+      },
+      {
+        key: 'shortcutIntents',
+        label: 'Shortcuts',
+        hint:
+          language === 'zh'
+            ? '控制 iOS Shortcuts 指令在应用内的消费执行。'
+            : 'Controls in-app execution of iOS Shortcuts commands.',
+      },
+      {
+        key: 'reasoningTimeline',
+        label: 'Reasoning Timeline',
+        hint:
+          language === 'zh'
+            ? '控制聊天消息里的推理/工具时间线面板。'
+            : 'Controls the reasoning/tool timeline panel in chat messages.',
+      },
+      {
+        key: 'chatImageCarousel',
+        label: 'Image Carousel',
+        hint:
+          language === 'zh'
+            ? '控制聊天消息多图轮播与全屏预览。'
+            : 'Controls multi-image carousel and full-screen preview in chat.',
+      },
+      {
+        key: 'agentLogsPagination',
+        label: 'Agent Log Pagination',
+        hint:
+          language === 'zh'
+            ? '控制 Agent 日志的向前加载。'
+            : 'Controls incremental backfill for agent logs.',
+      },
+    ],
+    [language],
+  );
+  const pricingEntries = useMemo(
+    () =>
+      Object.entries(pricing).sort(([left], [right]) => {
+        if (left.toLowerCase() === 'others') {
+          return 1;
+        }
+        if (right.toLowerCase() === 'others') {
+          return -1;
+        }
+        return left.localeCompare(right);
+      }),
+    [pricing],
+  );
+  const dailyBudgetStatus = useMemo(
+    () => evaluateDailyBudget(dashboardEstimatedCostToday, dailyBudget),
+    [dailyBudget, dashboardEstimatedCostToday],
   );
 
   const appVersion = Constants.expoConfig?.version ?? 'dev';
@@ -131,6 +243,25 @@ export function SettingsScreen(): JSX.Element {
 
   const formatGatewayAddress = (profile: { host: string; port: number; tls: boolean }): string =>
     `${profile.tls ? 'https' : 'http'}://${profile.host}:${profile.port}`;
+  const spotlightLabel = language === 'zh' ? 'Spotlight 搜索' : 'Spotlight Search';
+  const spotlightHint =
+    language === 'zh'
+      ? '关闭后会清理系统搜索索引，不再把网关、Agent 和会话标题暴露给 Spotlight。'
+      : 'Turn off to clear system search index and stop exposing gateway, agent, and session titles to Spotlight.';
+  const privacyTitle = language === 'zh' ? '隐私' : 'Privacy';
+  const privacyHint =
+    language === 'zh'
+      ? '关闭后不再把聊天消息持久化到本地缓存。当前运行中的会话仍会保留在内存里，已落盘的历史会立即清除。'
+      : 'Turn off to stop persisting chat transcripts to local cache. Current in-memory sessions remain, and existing persisted history is cleared immediately.';
+  const privacyToggleLabel = language === 'zh' ? '保留本地聊天记录' : 'Persist local chat transcripts';
+  const formatMoney = (value: number): string => formatCurrencyAmount(value, pricingCurrency, language);
+
+  const resetPricingForm = (): void => {
+    setEditingPricingKey(null);
+    setPricingModelInput('');
+    setPricingInputPrice('');
+    setPricingOutputPrice('');
+  };
 
   const handleSwitchGateway = async (profileId: string): Promise<void> => {
     if (profileId === activeProfileId || switchingGatewayId) {
@@ -158,6 +289,75 @@ export function SettingsScreen(): JSX.Element {
     }
 
     setAccentColor(normalized);
+  };
+
+  const handleApplyDailyBudget = (): void => {
+    const normalized = dailyBudgetInput.trim();
+    if (!normalized) {
+      setDailyBudget(null);
+      return;
+    }
+
+    const parsed = Number.parseFloat(normalized);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      Alert.alert(t('settings_budget_invalid_title'), t('settings_budget_invalid_body'));
+      return;
+    }
+
+    setDailyBudget(parsed);
+  };
+
+  const handleSaveModelPricing = (): void => {
+    const model = pricingModelInput.trim();
+    const inputPerMillion = Number.parseFloat(pricingInputPrice.trim());
+    const outputPerMillion = Number.parseFloat(pricingOutputPrice.trim());
+
+    if (!model || !Number.isFinite(inputPerMillion) || inputPerMillion < 0 || !Number.isFinite(outputPerMillion) || outputPerMillion < 0) {
+      Alert.alert(t('settings_pricing_invalid_title'), t('settings_pricing_invalid_body'));
+      return;
+    }
+
+    upsertModelPricing(model, {
+      inputPerMillion,
+      outputPerMillion,
+    });
+    recalculateDashboardCost();
+    recalculateChatSessionCosts();
+    resetPricingForm();
+  };
+
+  const handleEditModelPricing = (model: string): void => {
+    const current = pricing[model];
+    if (!current) {
+      return;
+    }
+
+    setEditingPricingKey(model);
+    setPricingModelInput(model);
+    setPricingInputPrice(String(current.inputPerMillion));
+    setPricingOutputPrice(String(current.outputPerMillion));
+  };
+
+  const handleDeleteModelPricing = (model: string): void => {
+    if (model.toLowerCase() === 'others') {
+      return;
+    }
+
+    Alert.alert(t('settings_pricing_delete_title'), t('settings_pricing_delete_body'), [
+      { text: t('common_cancel'), style: 'cancel' },
+      {
+        text: t('settings_pricing_delete_action'),
+        style: 'destructive',
+        onPress: () => {
+          removeModelPricing(model);
+          recalculateDashboardCost();
+          recalculateChatSessionCosts();
+          if (editingPricingKey === model) {
+            resetPricingForm();
+          }
+        },
+      },
+    ]);
   };
 
   const handlePublishSurface = async (): Promise<void> => {
@@ -200,6 +400,8 @@ export function SettingsScreen(): JSX.Element {
           dynamicIslandEnabled: preferences.dynamicIslandEnabled,
           widgetEnabled: preferences.widgetEnabled,
           dashboardSectionOrder: preferences.dashboardSectionOrder,
+          pricingCurrency,
+          dailyBudget,
         },
         connection: {
           status: connection.connectionStatus,
@@ -363,6 +565,185 @@ export function SettingsScreen(): JSX.Element {
       </View>
 
       <View style={styles.section}>
+        <Text style={styles.sectionTitle}>{privacyTitle}</Text>
+        <Text style={styles.sectionHint}>{privacyHint}</Text>
+        <View style={styles.toggleRow}>
+          <Text style={styles.toggleLabel}>{privacyToggleLabel}</Text>
+          <View style={styles.toggleSwitchWrap}>
+            <Switch
+              value={persistChatTranscripts}
+              onValueChange={(enabled) => {
+                setPersistChatTranscripts(enabled);
+                if (!enabled) {
+                  clearAllPersistedSessionMessages();
+                }
+              }}
+              trackColor={switchTrack}
+            />
+          </View>
+        </View>
+      </View>
+
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>{t('settings_pricing_title')}</Text>
+        <Text style={styles.sectionHint}>
+          {t('settings_pricing_hint')} {pricingCurrencyLabel(pricingCurrency, language)}
+        </Text>
+
+        <Text style={styles.subSectionTitle}>{t('settings_currency_title')}</Text>
+        <View style={styles.segmentRow}>
+          {SUPPORTED_PRICING_CURRENCIES.map((currency) => {
+            const selected = pricingCurrency === currency;
+            return (
+              <Pressable
+                key={currency}
+                style={[
+                  styles.segmentButton,
+                  selected && styles.segmentButtonSelected,
+                  { borderColor: accentColor },
+                  selected && { backgroundColor: accentColor },
+                ]}
+                onPress={() => {
+                  setPricingCurrency(currency);
+                }}
+              >
+                <Text style={[styles.segmentButtonText, selected && styles.segmentButtonTextSelected]}>
+                  {pricingCurrencyLabel(currency, language)}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
+        <Text style={styles.sectionHint}>{t('settings_currency_hint')}</Text>
+
+        <Text style={styles.subSectionTitle}>{t('settings_budget_title')}</Text>
+        <View style={styles.inputRow}>
+          <TextInput
+            value={dailyBudgetInput}
+            onChangeText={setDailyBudgetInput}
+            placeholder={t('settings_budget_placeholder')}
+            placeholderTextColor={mapColorForMode('#64748B', themeMode)}
+            keyboardType="decimal-pad"
+            autoCapitalize="none"
+            autoCorrect={false}
+            style={styles.input}
+          />
+          <Pressable style={[styles.inlineActionButton, { borderColor: accentColor }]} onPress={handleApplyDailyBudget}>
+            <Text style={[styles.inlineActionText, { color: accentColor }]}>{t('common_save')}</Text>
+          </Pressable>
+          <Pressable
+            style={[styles.inlineActionButton, { borderColor: mapColorForMode('#334155', themeMode) }]}
+            onPress={() => {
+              setDailyBudget(null);
+              setDailyBudgetInput('');
+            }}
+          >
+            <Text style={styles.inlineActionText}>{t('settings_budget_clear')}</Text>
+          </Pressable>
+        </View>
+        <View style={styles.metaRow}>
+          <Text style={styles.metaLabel}>{t('settings_budget_today_spend')}</Text>
+          <Text style={styles.metaValue}>{formatMoney(dailyBudgetStatus.spendToday)}</Text>
+        </View>
+        <View style={styles.metaRow}>
+          <Text style={styles.metaLabel}>{t('settings_budget_current_limit')}</Text>
+          <Text style={styles.metaValue}>
+            {dailyBudgetStatus.dailyBudget === null ? t('settings_budget_unset') : formatMoney(dailyBudgetStatus.dailyBudget)}
+          </Text>
+        </View>
+        <Text style={styles.sectionHint}>
+          {dailyBudgetStatus.state === 'exceeded'
+            ? t('settings_budget_status_exceeded')
+            : dailyBudgetStatus.state === 'near_limit'
+              ? t('settings_budget_status_near')
+              : dailyBudgetStatus.state === 'within_limit'
+                ? t('settings_budget_status_within')
+                : t('settings_budget_status_idle')}
+        </Text>
+
+        <Text style={styles.subSectionTitle}>{t('settings_pricing_editor_title')}</Text>
+        <TextInput
+          value={pricingModelInput}
+          onChangeText={setPricingModelInput}
+          placeholder={t('settings_pricing_model_placeholder')}
+          placeholderTextColor={mapColorForMode('#64748B', themeMode)}
+          autoCapitalize="none"
+          autoCorrect={false}
+          style={styles.input}
+        />
+        <View style={styles.inputRow}>
+          <TextInput
+            value={pricingInputPrice}
+            onChangeText={setPricingInputPrice}
+            placeholder={t('settings_pricing_input_placeholder')}
+            placeholderTextColor={mapColorForMode('#64748B', themeMode)}
+            keyboardType="decimal-pad"
+            autoCapitalize="none"
+            autoCorrect={false}
+            style={styles.input}
+          />
+          <TextInput
+            value={pricingOutputPrice}
+            onChangeText={setPricingOutputPrice}
+            placeholder={t('settings_pricing_output_placeholder')}
+            placeholderTextColor={mapColorForMode('#64748B', themeMode)}
+            keyboardType="decimal-pad"
+            autoCapitalize="none"
+            autoCorrect={false}
+            style={styles.input}
+          />
+        </View>
+        <View style={styles.actionRow}>
+          <Pressable style={[styles.primaryButton, { backgroundColor: accentColor }]} onPress={handleSaveModelPricing}>
+            <Text style={styles.primaryButtonText}>
+              {editingPricingKey ? t('settings_pricing_update') : t('settings_pricing_save')}
+            </Text>
+          </Pressable>
+          <Pressable style={styles.ghostButton} onPress={resetPricingForm}>
+            <Text style={styles.ghostButtonText}>{t('settings_pricing_clear_form')}</Text>
+          </Pressable>
+        </View>
+
+        {pricingEntries.length === 0 ? (
+          <Text style={styles.sectionHint}>{t('settings_pricing_empty')}</Text>
+        ) : (
+          <View style={styles.pricingList}>
+            {pricingEntries.map(([model, modelPricing]) => {
+              const isFallback = model.toLowerCase() === 'others';
+              return (
+                <View key={model} style={styles.pricingItem}>
+                  <View style={styles.pricingItemMain}>
+                    <Text style={styles.pricingItemTitle}>{model}</Text>
+                    <Text style={styles.pricingItemMeta}>
+                      {t('settings_pricing_input_short')} {modelPricing.inputPerMillion.toFixed(4)} · {t('settings_pricing_output_short')}{' '}
+                      {modelPricing.outputPerMillion.toFixed(4)}
+                    </Text>
+                  </View>
+                  <View style={styles.pricingItemActions}>
+                    <Pressable style={[styles.inlineActionButton, { borderColor: accentColor }]} onPress={() => handleEditModelPricing(model)}>
+                      <Text style={[styles.inlineActionText, { color: accentColor }]}>{t('settings_pricing_edit')}</Text>
+                    </Pressable>
+                    {isFallback ? (
+                      <View style={styles.pricingFallbackBadge}>
+                        <Text style={styles.pricingFallbackText}>{t('settings_pricing_fallback')}</Text>
+                      </View>
+                    ) : (
+                      <Pressable
+                        style={[styles.inlineActionButton, { borderColor: mapColorForMode('#7F1D1D', themeMode) }]}
+                        onPress={() => handleDeleteModelPricing(model)}
+                      >
+                        <Text style={styles.pricingDeleteText}>{t('settings_pricing_delete')}</Text>
+                      </Pressable>
+                    )}
+                  </View>
+                </View>
+              );
+            })}
+          </View>
+        )}
+      </View>
+
+      <View style={styles.section}>
         <View style={styles.sectionHeaderRow}>
           <Text style={styles.sectionTitle}>{t('dashboard_section_order_title')}</Text>
           <Pressable
@@ -429,6 +810,17 @@ export function SettingsScreen(): JSX.Element {
             <Switch value={dynamicIslandEnabled} onValueChange={setDynamicIslandEnabled} trackColor={switchTrack} />
           </View>
         </View>
+        {Platform.OS === 'ios' && (
+          <>
+            <View style={styles.toggleRow}>
+              <Text style={styles.toggleLabel}>{spotlightLabel}</Text>
+              <View style={styles.toggleSwitchWrap}>
+                <Switch value={spotlightEnabled} onValueChange={setSpotlightEnabled} trackColor={switchTrack} />
+              </View>
+            </View>
+            <Text style={styles.sectionHint}>{spotlightHint}</Text>
+          </>
+        )}
 
         <View style={styles.actionRow}>
           <Pressable
@@ -453,6 +845,44 @@ export function SettingsScreen(): JSX.Element {
 
       <View style={styles.section}>
         <View style={styles.sectionHeaderRow}>
+          <Text style={styles.sectionTitle}>{language === 'zh' ? 'Experimental Features' : 'Experimental Features'}</Text>
+          <Pressable
+            style={[styles.inlineActionButton, { borderColor: accentColor }]}
+            onPress={() => {
+              resetExperimentalFeatures();
+            }}
+          >
+            <Text style={[styles.inlineActionText, { color: accentColor }]}>{t('dashboard_section_order_reset')}</Text>
+          </Pressable>
+        </View>
+        <Text style={styles.sectionHint}>
+          {language === 'zh'
+            ? '轻量 feature flag 开关。可按构建默认值灰度，也可在本机覆盖。'
+            : 'Lightweight feature flags. Defaults can be rolled out per build and overridden locally.'}
+        </Text>
+
+        {experimentalFeatureRows.map((feature) => (
+          <View key={feature.key}>
+            <View style={styles.toggleRow}>
+              <Text style={styles.toggleLabel}>{feature.label}</Text>
+              <View style={styles.toggleSwitchWrap}>
+                <Switch
+                  value={experimentalFeatures[feature.key]}
+                  onValueChange={(enabled) => {
+                    setExperimentalFeatureEnabled(feature.key, enabled);
+                  }}
+                  trackColor={switchTrack}
+                />
+              </View>
+            </View>
+            <Text style={styles.sectionHint}>{feature.hint}</Text>
+          </View>
+        ))}
+      </View>
+
+      {experimentalFeatures.healthBridge && (
+      <View style={styles.section}>
+        <View style={styles.sectionHeaderRow}>
           <Text style={styles.sectionTitle}>{t('settings_health_bridge_title')}</Text>
           <Pressable
             style={[styles.inlineActionButton, { borderColor: accentColor }]}
@@ -465,6 +895,7 @@ export function SettingsScreen(): JSX.Element {
         </View>
         <Text style={styles.sectionHint}>{t('settings_health_bridge_hint')}</Text>
       </View>
+      )}
 
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>{t('settings_appearance_title')}</Text>
@@ -828,6 +1259,56 @@ const styles = createAdaptiveStyles({
   },
   gatewayBadgeTextIdle: {
     color: '#CBD5E1',
+  },
+  pricingList: {
+    gap: 8,
+  },
+  pricingItem: {
+    borderWidth: 1,
+    borderColor: '#1E293B',
+    borderRadius: 10,
+    backgroundColor: '#0F172A',
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    gap: 10,
+  },
+  pricingItemMain: {
+    gap: 2,
+  },
+  pricingItemTitle: {
+    color: '#E2E8F0',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  pricingItemMeta: {
+    color: '#94A3B8',
+    fontSize: 11,
+    lineHeight: 16,
+  },
+  pricingItemActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  pricingFallbackBadge: {
+    minHeight: 34,
+    paddingHorizontal: 12,
+    borderRadius: 999,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#123538',
+    borderWidth: 1,
+    borderColor: '#2A9D8F',
+  },
+  pricingFallbackText: {
+    color: '#CFFAFE',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  pricingDeleteText: {
+    color: '#FCA5A5',
+    fontSize: 12,
+    fontWeight: '700',
   },
   inlineActionButton: {
     borderWidth: 1,

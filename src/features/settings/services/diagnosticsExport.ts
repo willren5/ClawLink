@@ -18,6 +18,8 @@ interface PreferencesInput {
   dynamicIslandEnabled: boolean;
   widgetEnabled: boolean;
   dashboardSectionOrder: string[];
+  pricingCurrency: string;
+  dailyBudget: number | null;
 }
 
 interface ConnectionInput {

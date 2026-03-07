@@ -1,30 +1,32 @@
 import * as Notifications from 'expo-notifications';
 
-import { getAgents } from '../../../lib/api';
 import { translate } from '../../../lib/i18n';
-import { useAgentsRuntimeStore } from '../../agents/store/agentsRuntimeStore';
-import { useChatStore } from '../../chat/store/chatStore';
-import { useConnectionStore } from '../../connection/store/connectionStore';
-import { useDashboardStore } from '../../dashboard/store/dashboardStore';
 import { useAppPreferencesStore, type AppLanguage } from '../../settings/store/preferencesStore';
-import { aggregateSystemSnapshot } from '../../system-surfaces/services/snapshotAggregator';
-import { publishSystemSurfaces } from '../../system-surfaces/services/surfaceBridge';
 import type { SystemSurfaceSnapshot } from '../../system-surfaces/types';
-import { useAlertStore, type AlertType } from '../store/alertStore';
+import {
+  defaultDeepLinkForAlert,
+  describeAlertQuickAction,
+  describeAlertQuickActions,
+} from '../incidentDefinitions';
+import { executeAlertQuickAction } from './incidentActions';
+import { useAlertStore } from '../store/alertStore';
+import type { AlertQuickActionId, AlertType } from '../types';
 
 export const ALERT_NOTIFICATION_CATEGORIES = {
   disconnect: 'clawlink_disconnect',
   queue: 'clawlink_queue',
   agent: 'clawlink_agent',
+  budget: 'clawlink_budget',
 } as const;
 
 export const ALERT_NOTIFICATION_ACTIONS = {
-  reconnect: 'action_reconnect_gateway',
-  openMonitor: 'action_open_monitor',
-  flushQueue: 'action_flush_queue',
-  openChat: 'action_open_chat',
-  refreshAgents: 'action_refresh_agents',
-  openAgents: 'action_open_agents',
+  reconnect: 'reconnect_gateway',
+  openMonitor: 'open_monitor',
+  flushQueue: 'flush_queue',
+  openChat: 'open_chat',
+  refreshAgents: 'refresh_agents',
+  openAgents: 'open_agents',
+  openDashboard: 'open_dashboard',
 } as const;
 
 function formatRelativeDuration(ms: number, language: AppLanguage): string {
@@ -64,6 +66,9 @@ export function buildAlertDetail(type: AlertType, snapshot: SystemSurfaceSnapsho
       return language === 'zh'
         ? `异常 Agent ${snapshot.errorCount} 个`
         : `${snapshot.errorCount} agents reporting errors`;
+    case 'budget_near_limit':
+    case 'budget_exceeded':
+      return '';
     default:
       return '';
   }
@@ -78,53 +83,31 @@ function categoryForAlertType(type: AlertType): string {
     return ALERT_NOTIFICATION_CATEGORIES.queue;
   }
 
+  if (type === 'budget_near_limit' || type === 'budget_exceeded') {
+    return ALERT_NOTIFICATION_CATEGORIES.budget;
+  }
+
   return ALERT_NOTIFICATION_CATEGORIES.agent;
-}
-
-function defaultDeepLinkForAlert(type: AlertType): string {
-  if (type === 'queue_backlog') {
-    return 'clawlink://chat';
-  }
-
-  if (type === 'disconnect_timeout') {
-    return 'clawlink://monitor';
-  }
-
-  return 'clawlink://agents';
 }
 
 function categoryActions(language: AppLanguage): Record<string, Notifications.NotificationAction[]> {
   return {
-    [ALERT_NOTIFICATION_CATEGORIES.disconnect]: [
-      {
-        identifier: ALERT_NOTIFICATION_ACTIONS.reconnect,
-        buttonTitle: language === 'zh' ? '立即重连' : 'Reconnect',
-      },
-      {
-        identifier: ALERT_NOTIFICATION_ACTIONS.openMonitor,
-        buttonTitle: language === 'zh' ? '打开监控' : 'Open Monitor',
-      },
-    ],
-    [ALERT_NOTIFICATION_CATEGORIES.queue]: [
-      {
-        identifier: ALERT_NOTIFICATION_ACTIONS.flushQueue,
-        buttonTitle: language === 'zh' ? '刷新队列' : 'Flush Queue',
-      },
-      {
-        identifier: ALERT_NOTIFICATION_ACTIONS.openChat,
-        buttonTitle: language === 'zh' ? '打开聊天' : 'Open Chat',
-      },
-    ],
-    [ALERT_NOTIFICATION_CATEGORIES.agent]: [
-      {
-        identifier: ALERT_NOTIFICATION_ACTIONS.refreshAgents,
-        buttonTitle: language === 'zh' ? '刷新状态' : 'Refresh',
-      },
-      {
-        identifier: ALERT_NOTIFICATION_ACTIONS.openAgents,
-        buttonTitle: language === 'zh' ? '打开 Agents' : 'Open Agents',
-      },
-    ],
+    [ALERT_NOTIFICATION_CATEGORIES.disconnect]: describeAlertQuickActions('disconnect_timeout', language).map((item) => ({
+      identifier: item.id,
+      buttonTitle: item.label,
+    })),
+    [ALERT_NOTIFICATION_CATEGORIES.queue]: describeAlertQuickActions('queue_backlog', language).map((item) => ({
+      identifier: item.id,
+      buttonTitle: item.label,
+    })),
+    [ALERT_NOTIFICATION_CATEGORIES.agent]: describeAlertQuickActions('agent_error', language).map((item) => ({
+      identifier: item.id,
+      buttonTitle: item.label,
+    })),
+    [ALERT_NOTIFICATION_CATEGORIES.budget]: describeAlertQuickActions('budget_exceeded', language).map((item) => ({
+      identifier: item.id,
+      buttonTitle: item.label,
+    })),
   };
 }
 
@@ -169,17 +152,27 @@ export function buildAlertNotificationContent(args: {
   };
 }
 
-async function refreshOperationalState(): Promise<void> {
-  await Promise.allSettled([
-    useConnectionStore.getState().pingActiveGateway(),
-    useConnectionStore.getState().pollAllGateways(),
-    useDashboardStore.getState().refresh(),
-    getAgents().then((response) => {
-      useAgentsRuntimeStore.getState().hydrateAgents(response.agents);
-    }),
-  ]);
+export function getAlertQuickActions(
+  type: AlertType,
+  language: AppLanguage,
+): Array<{ id: AlertQuickActionId; label: string; deepLink?: string }> {
+  return describeAlertQuickActions(type, language).map((item) => ({
+    id: item.id,
+    label: item.label,
+    deepLink: item.deepLink,
+  }));
+}
 
-  await publishSystemSurfaces(aggregateSystemSnapshot()).catch(() => undefined);
+export function getAlertQuickAction(
+  actionId: AlertQuickActionId,
+  language: AppLanguage,
+): { id: AlertQuickActionId; label: string; deepLink?: string } {
+  const descriptor = describeAlertQuickAction(actionId, language);
+  return {
+    id: descriptor.id,
+    label: descriptor.label,
+    deepLink: descriptor.deepLink,
+  };
 }
 
 export async function handleAlertNotificationResponse(
@@ -205,32 +198,28 @@ export async function handleAlertNotificationResponse(
     return;
   }
 
-  switch (response.actionIdentifier) {
-    case ALERT_NOTIFICATION_ACTIONS.reconnect:
-      await refreshOperationalState();
-      handleUrl('clawlink://dashboard');
+  const supportedActionIds = new Set<AlertQuickActionId>([
+    ALERT_NOTIFICATION_ACTIONS.reconnect,
+    ALERT_NOTIFICATION_ACTIONS.openMonitor,
+    ALERT_NOTIFICATION_ACTIONS.flushQueue,
+    ALERT_NOTIFICATION_ACTIONS.openChat,
+    ALERT_NOTIFICATION_ACTIONS.refreshAgents,
+    ALERT_NOTIFICATION_ACTIONS.openAgents,
+    ALERT_NOTIFICATION_ACTIONS.openDashboard,
+  ]);
+  const actionId = response.actionIdentifier as AlertQuickActionId;
+
+  if (supportedActionIds.has(actionId)) {
+    await executeAlertQuickAction(actionId).catch(() => undefined);
+    const action = describeAlertQuickAction(actionId, getCurrentNotificationLanguage());
+    if (action.deepLink) {
+      handleUrl(action.deepLink);
       return;
-    case ALERT_NOTIFICATION_ACTIONS.openMonitor:
-      handleUrl('clawlink://monitor');
-      return;
-    case ALERT_NOTIFICATION_ACTIONS.flushQueue:
-      await useChatStore.getState().flushPendingQueue().catch(() => undefined);
-      handleUrl('clawlink://chat');
-      return;
-    case ALERT_NOTIFICATION_ACTIONS.openChat:
-      handleUrl('clawlink://chat');
-      return;
-    case ALERT_NOTIFICATION_ACTIONS.refreshAgents:
-      await refreshOperationalState();
-      handleUrl('clawlink://agents');
-      return;
-    case ALERT_NOTIFICATION_ACTIONS.openAgents:
-      handleUrl('clawlink://agents');
-      return;
-    default:
-      if (deepLink) {
-        handleUrl(deepLink);
-      }
+    }
+  }
+
+  if (deepLink) {
+    handleUrl(deepLink);
   }
 }
 

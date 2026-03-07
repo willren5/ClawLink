@@ -10,6 +10,7 @@ import {
   restartAgent,
   toggleAgent,
 } from '../../../lib/api';
+import { getAppErrorCode, type AppErrorCode } from '../../../lib/errors/appError';
 import type { AgentsResponse } from '../../../lib/schemas';
 import { authenticateAction } from '../../../lib/security/biometric';
 import { useAuditLogStore } from '../../security/store/auditLogStore';
@@ -23,6 +24,7 @@ interface UseAgentsControlResult {
   error: string | null;
   selectedAgentId: string | null;
   selectedAgentLogs: string[];
+  logsHasMore: boolean;
   logsLoading: boolean;
   setSelectedAgentId: (agentId: string | null) => void;
   refresh: () => Promise<void>;
@@ -30,12 +32,15 @@ interface UseAgentsControlResult {
     name: string;
     model?: string;
     systemPrompt?: string;
-  }) => Promise<{ ok: boolean; message?: string; error?: string }>;
+  }) => Promise<{ ok: boolean; message?: string; error?: string; errorCode?: AppErrorCode }>;
   toggleAgentStatus: (agentId: string, enabled: boolean) => Promise<boolean>;
   restartOneAgent: (agentId: string) => Promise<boolean>;
   killOneAgent: (agentId: string) => Promise<boolean>;
   loadAgentLogs: (agentId: string) => Promise<void>;
+  loadMoreAgentLogs: () => Promise<void>;
 }
+
+const DEFAULT_AGENT_LOGS_LIMIT = 100;
 
 function mapAgents(response: AgentsResponse): AgentListItem[] {
   return response.agents.map((agent: AgentsResponse['agents'][number]) => ({
@@ -55,6 +60,8 @@ export function useAgentsControl(): UseAgentsControlResult {
   const [error, setError] = useState<string | null>(null);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [selectedAgentLogs, setSelectedAgentLogs] = useState<string[]>([]);
+  const [selectedAgentLogsLimit, setSelectedAgentLogsLimit] = useState(DEFAULT_AGENT_LOGS_LIMIT);
+  const [logsHasMore, setLogsHasMore] = useState(false);
   const [logsLoading, setLogsLoading] = useState(false);
   const appendAuditEntry = useAuditLogStore((state) => state.appendEntry);
 
@@ -103,7 +110,17 @@ export function useAgentsControl(): UseAgentsControlResult {
       name: string;
       model?: string;
       systemPrompt?: string;
-    }): Promise<{ ok: boolean; message?: string; error?: string }> => {
+    }): Promise<{ ok: boolean; message?: string; error?: string; errorCode?: AppErrorCode }> => {
+      const allowed = await authenticateAction('Create agent?');
+      if (!allowed) {
+        await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+        return {
+          ok: false,
+          error: 'Biometric check cancelled',
+          errorCode: undefined,
+        };
+      }
+
       try {
         const normalized = {
           name: input.name,
@@ -120,6 +137,7 @@ export function useAgentsControl(): UseAgentsControlResult {
         };
       } catch (error: unknown) {
         const firstErrorMessage = error instanceof Error ? error.message : 'Failed to create agent.';
+        const firstErrorCode = getAppErrorCode(error);
         const hasOptionalConfig = Boolean(input.model?.trim() || input.systemPrompt?.trim());
 
         if (hasOptionalConfig) {
@@ -145,6 +163,7 @@ export function useAgentsControl(): UseAgentsControlResult {
         return {
           ok: false,
           error: firstErrorMessage,
+          errorCode: firstErrorCode,
         };
       }
     },
@@ -238,16 +257,18 @@ export function useAgentsControl(): UseAgentsControlResult {
     [appendAuditEntry, refresh],
   );
 
-  const loadAgentLogs = useCallback(async (agentId: string) => {
+  const loadAgentLogs = useCallback(async (agentId: string, limit = DEFAULT_AGENT_LOGS_LIMIT) => {
     setLogsLoading(true);
     try {
-      const response = await getAgentLogs(agentId);
+      const response = await getAgentLogs(agentId, { limit });
       if (!mountedRef.current) {
         return;
       }
 
       setSelectedAgentId(agentId);
       setSelectedAgentLogs(response.logs);
+      setSelectedAgentLogsLimit(limit);
+      setLogsHasMore(response.logs.length >= limit);
     } catch (error: unknown) {
       if (!mountedRef.current) {
         return;
@@ -255,12 +276,21 @@ export function useAgentsControl(): UseAgentsControlResult {
       const message = error instanceof Error ? error.message : 'Failed to load logs';
       setSelectedAgentId(agentId);
       setSelectedAgentLogs([`[log-unavailable] ${message}`]);
+      setLogsHasMore(false);
     } finally {
       if (mountedRef.current) {
         setLogsLoading(false);
       }
     }
   }, []);
+
+  const loadMoreAgentLogs = useCallback(async () => {
+    if (!selectedAgentId || logsLoading || !logsHasMore) {
+      return;
+    }
+
+    await loadAgentLogs(selectedAgentId, selectedAgentLogsLimit + DEFAULT_AGENT_LOGS_LIMIT);
+  }, [loadAgentLogs, logsHasMore, logsLoading, selectedAgentId, selectedAgentLogsLimit]);
 
   return {
     agents,
@@ -269,6 +299,7 @@ export function useAgentsControl(): UseAgentsControlResult {
     error,
     selectedAgentId,
     selectedAgentLogs,
+    logsHasMore,
     logsLoading,
     setSelectedAgentId,
     refresh,
@@ -277,5 +308,6 @@ export function useAgentsControl(): UseAgentsControlResult {
     restartOneAgent,
     killOneAgent,
     loadAgentLogs,
+    loadMoreAgentLogs,
   };
 }

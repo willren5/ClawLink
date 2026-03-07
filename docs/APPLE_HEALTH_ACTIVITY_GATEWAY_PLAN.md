@@ -36,6 +36,8 @@ Allow ClawLink to optionally act as a secure bridge so OpenClaw can request read
 - Short-lived signed requests (nonce + timestamp expiry <= 60s).
 - Local on-device cache only, default TTL <= 15 minutes.
 - Redact PII in gateway logs by default.
+- Native bridge must reject reads when bridge is OFF or requested metrics exceed the locally allowed metric set.
+- Cached summaries must be dropped on revoke/disable and never survive past the TTL window.
 
 ## Data Contract (Draft)
 ```json

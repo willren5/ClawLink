@@ -28,6 +28,8 @@ test('masks identifiers and strips hidden debug token details from diagnostics p
       dynamicIslandEnabled: true,
       widgetEnabled: true,
       dashboardSectionOrder: ['volume'],
+      pricingCurrency: 'USD',
+      dailyBudget: 20,
     },
     connection: {
       status: 'connected',

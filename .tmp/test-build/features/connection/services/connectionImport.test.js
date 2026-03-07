@@ -18,12 +18,11 @@ const connectionImport_1 = require("./connectionImport");
         token: 'ocg_live_token_123',
     });
 });
-(0, node_test_1.default)('parses clawlink connect deep links', () => {
+(0, node_test_1.default)('drops token from clawlink connect deep links', () => {
     const result = (0, connectionImport_1.parseGatewayImport)('clawlink://connect?host=gateway.local&port=443&token=abc123&tls=true&name=Office');
     strict_1.default.deepEqual(result, {
         host: 'gateway.local',
         port: 443,
-        token: 'abc123',
         tls: true,
         name: 'Office',
     });

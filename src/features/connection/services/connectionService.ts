@@ -2,12 +2,22 @@ import axios, { AxiosError } from 'axios';
 import { ZodError } from 'zod';
 
 import {
+  APP_ERROR_CODES,
+  ClawLinkError,
+  getAppErrorCode,
+  inferAppErrorCode,
+} from '../../../lib/errors/appError';
+import {
   DevicesResponseSchema,
   HealthResponseSchema,
   type DevicesResponse,
   type HealthResponse,
 } from '../../../lib/schemas';
 import { buildGatewayBaseUrl, normalizeHost } from '../../../lib/utils/network';
+import {
+  buildTlsDowngradeBlockedMessage,
+  shouldRetryWithTlsUpgrade,
+} from './connectionRetryPolicy';
 import type { ConnectGatewayInput, ConnectionCheckResult, ConnectionErrorPayload, GatewayProfile } from '../types';
 
 const REQUEST_TIMEOUT_MS = 10000;
@@ -30,39 +40,31 @@ const WS_CONNECT_FALLBACK_PROFILES: Array<{
 export class ConnectionError extends Error implements ConnectionErrorPayload {
   status?: number;
   code?: string;
+  appCode?: ConnectionErrorPayload['appCode'];
 
   constructor(payload: ConnectionErrorPayload) {
     super(payload.message);
     this.name = 'ConnectionError';
     this.status = payload.status;
     this.code = payload.code;
+    this.appCode = payload.appCode;
   }
-}
-
-function shouldTryTlsFlip(error: unknown): boolean {
-  const lowered = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
-
-  if (lowered.includes('http 401') || lowered.includes('http 403')) {
-    return false;
-  }
-
-  return (
-    lowered.includes('network') ||
-    lowered.includes('timeout') ||
-    lowered.includes('ssl') ||
-    lowered.includes('tls') ||
-    lowered.includes('wrong version number') ||
-    lowered.includes('unexpected eof') ||
-    lowered.includes('econnrefused') ||
-    lowered.includes('connection refused') ||
-    lowered.includes('could not connect') ||
-    lowered.includes('socket hang up') ||
-    lowered.includes('empty reply') ||
-    lowered.includes('http 404')
-  );
 }
 
 function toConnectionError(error: unknown): ConnectionError {
+  if (error instanceof ConnectionError) {
+    return error;
+  }
+
+  if (error instanceof ClawLinkError) {
+    return new ConnectionError({
+      status: error.status,
+      code: error.sourceCode,
+      appCode: error.code,
+      message: error.message,
+    });
+  }
+
   if (error && typeof error === 'object' && 'isAxiosError' in error) {
     const axiosError = error as AxiosError<{ message?: string; error?: string }>;
     const status = axiosError.response?.status;
@@ -71,15 +73,26 @@ function toConnectionError(error: unknown): ConnectionError {
     return new ConnectionError({
       status,
       code: axiosError.code,
+      appCode: inferAppErrorCode({
+        message,
+        status,
+        sourceCode: axiosError.response?.data?.error ?? axiosError.code,
+      }),
       message: `HTTP ${status ?? 'NETWORK'}: ${message}`,
     });
   }
 
   if (error instanceof Error) {
-    return new ConnectionError({ message: error.message });
+    return new ConnectionError({
+      appCode: inferAppErrorCode({ message: error.message }),
+      message: error.message,
+    });
   }
 
-  return new ConnectionError({ message: 'Unknown connection error' });
+  return new ConnectionError({
+    appCode: APP_ERROR_CODES.UNKNOWN,
+    message: 'Unknown connection error',
+  });
 }
 
 function isHtmlPayload(value: unknown): boolean {
@@ -92,10 +105,11 @@ function isHtmlPayload(value: unknown): boolean {
 
 function parseHealthPayload(value: unknown): HealthResponse {
   if (isHtmlPayload(value)) {
-    throw new ConnectionError({
-      message:
-        'Gateway 返回了 HTML 页面而不是 API JSON。请确认 Host/Port 指向 API 网关（默认 18789）并且不是 Web 控制台静态站点。',
-    });
+      throw new ConnectionError({
+        appCode: APP_ERROR_CODES.RESPONSE_SCHEMA_INVALID,
+        message:
+          'Gateway 返回了 HTML 页面而不是 API JSON。请确认 Host/Port 指向 API 网关（默认 18789）并且不是 Web 控制台静态站点。',
+      });
   }
 
   try {
@@ -103,6 +117,7 @@ function parseHealthPayload(value: unknown): HealthResponse {
   } catch (error: unknown) {
     if (error instanceof ZodError) {
       throw new ConnectionError({
+        appCode: APP_ERROR_CODES.RESPONSE_SCHEMA_INVALID,
         message: `健康检查响应格式不正确: ${error.issues[0]?.message ?? 'invalid response'}`,
       });
     }
@@ -237,17 +252,14 @@ function buildConnectPayload(
 }
 
 function shouldRetryConnectProfile(error: unknown): boolean {
-  const lowered = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+  const code = getAppErrorCode(error);
   return (
-    lowered.includes('scope') ||
-    lowered.includes('role') ||
-    lowered.includes('permission') ||
-    lowered.includes('forbidden') ||
-    lowered.includes('unauthorized') ||
-    lowered.includes('denied') ||
-    lowered.includes('invalid') ||
-    lowered.includes('schema') ||
-    lowered.includes('connect')
+    code === APP_ERROR_CODES.AUTH_EXPIRED ||
+    code === APP_ERROR_CODES.AUTH_FORBIDDEN ||
+    code === APP_ERROR_CODES.GATEWAY_ORIGIN_NOT_ALLOWED ||
+    code === APP_ERROR_CODES.REQUEST_INVALID ||
+    code === APP_ERROR_CODES.RESPONSE_SCHEMA_INVALID ||
+    code === APP_ERROR_CODES.WS_CONNECT_FAILED
   );
 }
 
@@ -290,7 +302,10 @@ async function probeGatewayViaWebSocket(baseUrl: string, token: string): Promise
         } catch {
           // no-op
         }
-        reject(new ConnectionError({ message: 'WebSocket gateway handshake timed out.' }));
+        reject(new ConnectionError({
+          appCode: APP_ERROR_CODES.TIMEOUT,
+          message: 'WebSocket gateway handshake timed out.',
+        }));
       }
     }, WS_FALLBACK_TIMEOUT_MS);
 
@@ -301,7 +316,10 @@ async function probeGatewayViaWebSocket(baseUrl: string, token: string): Promise
       settled = true;
       clearTimeout(timeoutId);
       for (const [, entry] of pending) {
-        entry.reject(new ConnectionError({ message: 'WebSocket gateway handshake interrupted.' }));
+        entry.reject(new ConnectionError({
+          appCode: APP_ERROR_CODES.WS_CONNECT_FAILED,
+          message: 'WebSocket gateway handshake interrupted.',
+        }));
       }
       pending.clear();
       try {
@@ -314,7 +332,10 @@ async function probeGatewayViaWebSocket(baseUrl: string, token: string): Promise
 
     const sendRequest = (method: string, params?: Record<string, unknown>): Promise<unknown> => {
       if (ws.readyState !== WebSocket.OPEN) {
-        return Promise.reject(new ConnectionError({ message: 'WebSocket gateway is not connected.' }));
+        return Promise.reject(new ConnectionError({
+          appCode: APP_ERROR_CODES.WS_CONNECT_FAILED,
+          message: 'WebSocket gateway is not connected.',
+        }));
       }
 
       requestId += 1;
@@ -362,7 +383,10 @@ async function probeGatewayViaWebSocket(baseUrl: string, token: string): Promise
       if (frame.type === 'event' && frame.event === 'connect.challenge' && !connectStarted) {
         connectStarted = true;
         const connectAndProbe = async (): Promise<void> => {
-          let lastError: unknown = new ConnectionError({ message: 'WebSocket gateway connect failed.' });
+          let lastError: unknown = new ConnectionError({
+            appCode: APP_ERROR_CODES.WS_CONNECT_FAILED,
+            message: 'WebSocket gateway connect failed.',
+          });
 
           for (const profile of WS_CONNECT_FALLBACK_PROFILES) {
             try {
@@ -400,7 +424,10 @@ async function probeGatewayViaWebSocket(baseUrl: string, token: string): Promise
             const message =
               error instanceof Error ? error.message : 'WebSocket gateway connect failed during handshake.';
             settle(() => {
-              reject(new ConnectionError({ message }));
+              reject(new ConnectionError({
+                appCode: getAppErrorCode(error),
+                message,
+              }));
             });
           });
         return;
@@ -419,6 +446,10 @@ async function probeGatewayViaWebSocket(baseUrl: string, token: string): Promise
           pendingEntry.reject(
             new ConnectionError({
               code: frame.error?.code,
+              appCode: inferAppErrorCode({
+                message: frame.error?.message ?? 'WebSocket gateway request failed.',
+                sourceCode: frame.error?.code,
+              }),
               message: frame.error?.message ?? 'WebSocket gateway request failed.',
             }),
           );
@@ -428,7 +459,10 @@ async function probeGatewayViaWebSocket(baseUrl: string, token: string): Promise
 
     ws.onerror = () => {
       settle(() => {
-        reject(new ConnectionError({ message: 'WebSocket gateway connection failed.' }));
+        reject(new ConnectionError({
+          appCode: APP_ERROR_CODES.WS_CONNECT_FAILED,
+          message: 'WebSocket gateway connection failed.',
+        }));
       });
     };
 
@@ -441,6 +475,10 @@ async function probeGatewayViaWebSocket(baseUrl: string, token: string): Promise
         reject(
           new ConnectionError({
             code: `${event.code}`,
+            appCode: inferAppErrorCode({
+              message: normalizeWsCloseReason(event.reason),
+              sourceCode: `${event.code}`,
+            }),
             message: normalizeWsCloseReason(event.reason),
           }),
         );
@@ -553,8 +591,8 @@ export async function connectToGateway(input: ConnectGatewayInput): Promise<Conn
       resolvedTls: input.tls,
     };
   } catch (primaryError: unknown) {
-    if (shouldTryTlsFlip(primaryError)) {
-      const fallbackTls = !input.tls;
+    if (shouldRetryWithTlsUpgrade(input.tls, primaryError)) {
+      const fallbackTls = true;
       const fallbackBaseUrl = buildGatewayBaseUrl(normalizedHost, input.port, fallbackTls);
 
       try {
@@ -566,6 +604,13 @@ export async function connectToGateway(input: ConnectGatewayInput): Promise<Conn
       } catch {
         // Keep original error context.
       }
+    }
+
+    if (input.tls) {
+      throw new ConnectionError({
+        appCode: getAppErrorCode(primaryError),
+        message: `${extractErrorMessage(primaryError)} ${buildTlsDowngradeBlockedMessage()}`,
+      });
     }
 
     throw toConnectionError(primaryError);

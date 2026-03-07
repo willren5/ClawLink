@@ -1,34 +1,47 @@
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 
+import { STORAGE_KEYS } from '../../../constants/storageKeys';
 import { mmkvZustandStorage } from '../../../lib/mmkv/zustandStorage';
-
-const PRICING_STORE_KEY = 'pricing-store';
-
-export interface ModelPricing {
-  inputPerMillion: number;
-  outputPerMillion: number;
-}
-
-export type PricingConfig = Record<string, ModelPricing>;
+import {
+  DAILY_BUDGET_WARNING_RATIO,
+  DEFAULT_PRICING,
+  DEFAULT_PRICING_CURRENCY,
+  SUPPORTED_PRICING_CURRENCIES,
+  estimateCostFromTokens,
+  evaluateDailyBudget,
+  formatCurrencyAmount,
+  normalizeDailyBudget,
+  normalizePricingCurrency,
+  pricingCurrencyLabel,
+  sanitizePricingConfig,
+  type ModelPricing,
+  type PricingConfig,
+  type PricingCurrency,
+} from '../services/pricingMath';
 
 interface PricingStoreState {
+  currency: PricingCurrency;
   pricing: PricingConfig;
+  dailyBudget: number | null;
+  setCurrency: (currency: PricingCurrency) => void;
+  setDailyBudget: (dailyBudget: number | null) => void;
   upsertModelPricing: (model: string, pricing: ModelPricing) => void;
   removeModelPricing: (model: string) => void;
 }
 
-const DEFAULT_PRICING: PricingConfig = {
-  DeepSeek: { inputPerMillion: 0.27, outputPerMillion: 1.1 },
-  Qwen: { inputPerMillion: 0.2, outputPerMillion: 0.8 },
-  Kimi: { inputPerMillion: 0.15, outputPerMillion: 0.6 },
-  others: { inputPerMillion: 0.25, outputPerMillion: 0.95 },
-};
-
 export const usePricingStore = create<PricingStoreState>()(
   persist(
     (set, get) => ({
+      currency: DEFAULT_PRICING_CURRENCY,
       pricing: DEFAULT_PRICING,
+      dailyBudget: null,
+      setCurrency: (currency) => {
+        set({ currency: normalizePricingCurrency(currency) });
+      },
+      setDailyBudget: (dailyBudget) => {
+        set({ dailyBudget: normalizeDailyBudget(dailyBudget) });
+      },
       upsertModelPricing: (model, pricing) => {
         const normalized = model.trim();
         if (!normalized) {
@@ -36,44 +49,55 @@ export const usePricingStore = create<PricingStoreState>()(
         }
 
         set({
-          pricing: {
+          pricing: sanitizePricingConfig({
             ...get().pricing,
             [normalized]: pricing,
-          },
+          }),
         });
       },
       removeModelPricing: (model) => {
         const normalized = model.trim();
-        if (!normalized) {
+        if (!normalized || normalized.toLowerCase() === 'others') {
           return;
         }
 
         const next = { ...get().pricing };
         delete next[normalized];
-        set({ pricing: next });
+        set({ pricing: sanitizePricingConfig(next) });
       },
     }),
     {
-      name: PRICING_STORE_KEY,
+      name: STORAGE_KEYS.PRICING_STORE,
       storage: createJSONStorage(() => mmkvZustandStorage),
-      partialize: (state) => ({ pricing: state.pricing }),
+      partialize: (state) => ({
+        currency: state.currency,
+        pricing: state.pricing,
+        dailyBudget: state.dailyBudget,
+      }),
+      onRehydrateStorage: () => (state) => {
+        if (!state) {
+          return;
+        }
+
+        usePricingStore.setState({
+          currency: normalizePricingCurrency(state.currency),
+          pricing: sanitizePricingConfig(state.pricing),
+          dailyBudget: normalizeDailyBudget(state.dailyBudget),
+        });
+      },
     },
   ),
 );
 
-export function estimateCostFromTokens(
-  usageByModel: Array<{ model: string; tokens: number }>,
-  pricing: PricingConfig,
-): number {
-  const total = usageByModel.reduce((sum, item) => {
-    const direct = pricing[item.model] ?? pricing[item.model.toLowerCase()] ?? pricing.others;
-    if (!direct) {
-      return sum;
-    }
-
-    const unit = direct.inputPerMillion / 1_000_000;
-    return sum + item.tokens * unit;
-  }, 0);
-
-  return Number(total.toFixed(4));
-}
+export type { ModelPricing, PricingConfig, PricingCurrency };
+export {
+  DAILY_BUDGET_WARNING_RATIO,
+  DEFAULT_PRICING,
+  DEFAULT_PRICING_CURRENCY,
+  SUPPORTED_PRICING_CURRENCIES,
+  estimateCostFromTokens,
+  evaluateDailyBudget,
+  formatCurrencyAmount,
+  normalizePricingCurrency,
+  pricingCurrencyLabel,
+};

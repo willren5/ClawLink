@@ -1,4 +1,5 @@
 import type { DevicesResponse, HealthResponse } from '../../lib/schemas';
+import type { AppErrorCode } from '../../lib/errors/appError';
 
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
 
@@ -40,6 +41,7 @@ export interface ConnectionCheckResult {
 export interface ConnectionErrorPayload {
   status?: number;
   code?: string;
+  appCode?: AppErrorCode;
   message: string;
 }
 

@@ -109,10 +109,33 @@ private func normalizedSeconds(_ value: Double) -> TimeInterval? {
   return value > 1_000_000_000_000 ? value / 1000 : value
 }
 
-private func formatRelativeTime(from value: Double) -> String {
-  let formatter = RelativeDateTimeFormatter()
-  formatter.unitsStyle = .short
-  return formatter.localizedString(for: normalizedTimestamp(value), relativeTo: Date())
+private func compactFreshnessText(from value: Double) -> String {
+  let age = max(Int(Date().timeIntervalSince(normalizedTimestamp(value))), 0)
+  if age < 5 {
+    return "now"
+  }
+  if age < 60 {
+    return "\(age)s"
+  }
+
+  let minutes = age / 60
+  if minutes < 60 {
+    return "\(minutes)m"
+  }
+
+  let hours = minutes / 60
+  if hours < 24 {
+    return "\(hours)h"
+  }
+
+  return "\(hours / 24)d"
+}
+
+private func formatCostLabel(_ value: Double) -> String {
+  if value < 0 {
+    return "No cost"
+  }
+  return String(format: "$%.2f", value)
 }
 
 private func disconnectElapsedText(from disconnectedSince: Double, prefix: String) -> String {
@@ -230,7 +253,7 @@ private struct ConnectionBadgeView: View {
 private struct LiveMetricChip: View {
   let symbol: String
   let label: String
-  let value: Int
+  let valueText: String
   let tint: Color
   let textColor: Color
 
@@ -239,9 +262,10 @@ private struct LiveMetricChip: View {
       Image(systemName: symbol)
         .font(.system(size: 10, weight: .semibold))
         .foregroundStyle(tint)
-      Text("\(label) \(max(0, value))")
+      Text("\(label) \(valueText)")
         .font(.system(size: 11, weight: .semibold, design: .rounded))
         .foregroundStyle(textColor)
+        .lineLimit(1)
     }
     .padding(.horizontal, 8)
     .padding(.vertical, 5)
@@ -302,24 +326,34 @@ private struct DynamicIslandCenterContent: View {
     return "No active tasks"
   }
 
+  private var secondarySummary: String {
+    if context.state.pendingMessages > 0 {
+      return "\(max(0, context.state.pendingMessages)) pending sync · \(max(0, context.state.channelsCount)) channels"
+    }
+    if context.state.sessionsCount > 0 {
+      return "\(max(0, context.state.sessionsCount)) active sessions · \(max(0, context.state.channelsCount)) channels"
+    }
+    if context.state.channelsCount > 0 {
+      return "\(max(0, context.state.channelsCount)) channels online"
+    }
+    return "Ready for new work"
+  }
+
   var body: some View {
-    VStack(alignment: .leading, spacing: 8) {
+    VStack(alignment: .leading, spacing: 5) {
       if hasActiveAgent {
-        Text("Agent: \(displayAgentName)")
+        Text(displayAgentName)
           .font(.system(size: 12, weight: .bold, design: .rounded))
-        Text(displayTask)
-          .font(.system(size: 12, weight: .medium, design: .rounded))
-          .lineLimit(2)
       } else {
-        Text("No active tasks")
+        Text(displayTask)
           .font(.system(size: 12, weight: .bold, design: .rounded))
+          .lineLimit(1)
       }
 
-      HStack(spacing: 8) {
-        LiveMetricChip(symbol: "person.2.fill", label: "Sessions", value: context.state.sessionsCount, tint: connectionState.accent, textColor: .primary)
-        LiveMetricChip(symbol: "bolt.horizontal.fill", label: "Channels", value: context.state.channelsCount, tint: connectionState.accent, textColor: .primary)
-        LiveMetricChip(symbol: "clock.fill", label: "Queue", value: context.state.queueCount, tint: connectionState.accent, textColor: .primary)
-      }
+      Text(hasActiveAgent ? displayTask : secondarySummary)
+        .font(.system(size: 11, weight: .medium, design: .rounded))
+        .foregroundStyle(.primary.opacity(0.82))
+        .lineLimit(1)
     }
   }
 }
@@ -431,6 +465,17 @@ private struct ClawLinkLiveActivityView: View {
     return "All quiet"
   }
 
+  private var summaryMetricLabel: String {
+    if context.state.pendingMessages > 0 {
+      return "\(max(0, context.state.pendingMessages))"
+    }
+    return formatCostLabel(context.state.costToday)
+  }
+
+  private var summaryMetricSymbol: String {
+    context.state.pendingMessages > 0 ? "arrow.triangle.2.circlepath.circle.fill" : "dollarsign.circle.fill"
+  }
+
   private var syncLabel: String {
     "\(max(context.state.queueCount - context.state.pendingMessages, 0))/\(max(context.state.queueCount, 0)) synced"
   }
@@ -472,16 +517,34 @@ private struct ClawLinkLiveActivityView: View {
           .lineLimit(2)
 
         HStack(spacing: 8) {
-          LiveMetricChip(symbol: "person.2.fill", label: "Sessions", value: context.state.sessionsCount, tint: connectionState.accent, textColor: primaryText)
-          LiveMetricChip(symbol: "bolt.horizontal.fill", label: "Channels", value: context.state.channelsCount, tint: connectionState.accent, textColor: primaryText)
-          LiveMetricChip(symbol: "clock.fill", label: "Queue", value: context.state.queueCount, tint: connectionState.accent, textColor: primaryText)
+          LiveMetricChip(
+            symbol: "person.2.fill",
+            label: "Sessions",
+            valueText: "\(max(0, context.state.sessionsCount))",
+            tint: connectionState.accent,
+            textColor: primaryText
+          )
+          LiveMetricChip(
+            symbol: "bolt.horizontal.fill",
+            label: "Channels",
+            valueText: "\(max(0, context.state.channelsCount))",
+            tint: connectionState.accent,
+            textColor: primaryText
+          )
+          LiveMetricChip(
+            symbol: summaryMetricSymbol,
+            label: context.state.pendingMessages > 0 ? "Sync" : "Cost",
+            valueText: summaryMetricLabel,
+            tint: connectionState.accent,
+            textColor: primaryText
+          )
         }
       }
 
       VStack(spacing: 6) {
         HStack {
           if context.state.costToday >= 0 {
-            Text(String(format: "$%.2f", context.state.costToday))
+            Text(formatCostLabel(context.state.costToday))
               .font(.system(size: 11, weight: .semibold, design: .rounded))
               .foregroundStyle(primaryText)
           } else {
@@ -492,7 +555,7 @@ private struct ClawLinkLiveActivityView: View {
 
           Spacer()
 
-          Text(formatRelativeTime(from: context.state.lastUpdated))
+          Text(compactFreshnessText(from: context.state.lastUpdated))
             .font(.system(size: 11, weight: .medium, design: .rounded))
             .foregroundStyle(secondaryText)
         }
@@ -539,26 +602,31 @@ struct ClawLinkLiveActivityWidget: Widget {
               connectionState: connectionState,
               label: expandedStatusText(state: context.state, connectionState: connectionState)
             )
+            .dynamicIsland(verticalPlacement: .belowIfTooWide)
           }
         }
 
         DynamicIslandExpandedRegion(.trailing) {
           if islandEnabled {
             VStack(alignment: .trailing, spacing: 2) {
-              Text(formatRelativeTime(from: context.state.lastUpdated))
+              Text(compactFreshnessText(from: context.state.lastUpdated))
                 .font(.system(size: 11, weight: .semibold, design: .rounded))
+                .lineLimit(1)
               if context.state.costToday >= 0 {
-                Text(String(format: "$%.2f", context.state.costToday))
+                Text(formatCostLabel(context.state.costToday))
                   .font(.system(size: 12, weight: .bold, design: .rounded))
+                  .lineLimit(1)
               }
             }
             .foregroundStyle(connectionState.accent)
+            .dynamicIsland(verticalPlacement: .belowIfTooWide)
           }
         }
 
         DynamicIslandExpandedRegion(.center) {
           if islandEnabled {
             DynamicIslandCenterContent(context: context, connectionState: connectionState)
+              .dynamicIsland(verticalPlacement: .belowIfTooWide)
           }
         }
 
@@ -588,13 +656,29 @@ struct ClawLinkLiveActivityWidget: Widget {
           } else {
             switch connectionState {
             case .online:
-              Text("\(max(0, context.state.sessionsCount))S · \(max(0, context.state.queueCount))Q")
-                .font(.system(size: 12, weight: .bold, design: .rounded))
-                .foregroundStyle(connectionState.accent)
+              if context.state.pendingMessages > 0 {
+                Text("↻\(max(0, context.state.pendingMessages))")
+                  .font(.system(size: 12, weight: .bold, design: .rounded))
+                  .foregroundStyle(connectionState.accent)
+              } else if context.state.costToday >= 0 {
+                Text(formatCostLabel(context.state.costToday))
+                  .font(.system(size: 12, weight: .bold, design: .rounded))
+                  .foregroundStyle(connectionState.accent)
+              } else {
+                Text(compactFreshnessText(from: context.state.lastUpdated))
+                  .font(.system(size: 12, weight: .bold, design: .rounded))
+                  .foregroundStyle(connectionState.accent)
+              }
             case .degraded:
-              Text("RCN")
-                .font(.system(size: 12, weight: .bold, design: .rounded))
-                .foregroundStyle(connectionState.accent)
+              if context.state.pendingMessages > 0 {
+                Text("↻\(max(0, context.state.pendingMessages))")
+                  .font(.system(size: 12, weight: .bold, design: .rounded))
+                  .foregroundStyle(connectionState.accent)
+              } else {
+                Text("Retry")
+                  .font(.system(size: 11, weight: .bold, design: .rounded))
+                  .foregroundStyle(connectionState.accent)
+              }
             case .offline:
               Text(compactDisconnectText(from: context.state.disconnectedSince))
                 .font(.system(size: 11, weight: .bold, design: .rounded))

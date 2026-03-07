@@ -143,6 +143,20 @@ function deriveYesterdayCost(): number | null {
   return Number.isFinite(candidate) ? candidate : null;
 }
 
+function deriveTodayCost(): number | null {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  const key = [
+    today.getFullYear(),
+    String(today.getMonth() + 1).padStart(2, '0'),
+    String(today.getDate()).padStart(2, '0'),
+  ].join('-');
+
+  const candidate = useDashboardStore.getState().costHistory[key]?.cost;
+  return Number.isFinite(candidate) ? candidate : null;
+}
+
 export function aggregateSystemSnapshot(): SystemSurfaceSnapshot {
   const connectionState = useConnectionStore.getState();
   const chatState = useChatStore.getState();
@@ -155,7 +169,7 @@ export function aggregateSystemSnapshot(): SystemSurfaceSnapshot {
   const pendingMessages = countPendingMessages(chatState.messagesBySession, pendingQueue);
   const activeAgent = deriveActiveAgent();
   const cards = dashboardState.snapshot.cards;
-  const costTodayCandidate = cards.estimatedCostToday;
+  const costTodayCandidate = deriveTodayCost() ?? cards.estimatedCostToday;
   const costToday = Number.isFinite(costTodayCandidate) ? costTodayCandidate : null;
   const costYesterday = deriveYesterdayCost();
   const requestsToday = Number.isFinite(cards.requestsToday) ? cards.requestsToday : null;

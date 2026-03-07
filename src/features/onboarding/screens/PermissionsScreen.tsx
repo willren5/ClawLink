@@ -23,11 +23,13 @@ interface PermissionDefinition {
   titleKey:
     | 'permission_item_camera_title'
     | 'permission_item_photos_title'
-    | 'permission_item_microphone_title';
+    | 'permission_item_microphone_title'
+    | 'permission_item_local_network_title';
   descriptionKey:
     | 'permission_item_camera_desc'
     | 'permission_item_photos_desc'
-    | 'permission_item_microphone_desc';
+    | 'permission_item_microphone_desc'
+    | 'permission_item_local_network_desc';
 }
 
 const PERMISSIONS: PermissionDefinition[] = [
@@ -46,6 +48,11 @@ const PERMISSIONS: PermissionDefinition[] = [
     titleKey: 'permission_item_microphone_title',
     descriptionKey: 'permission_item_microphone_desc',
   },
+  {
+    key: 'localNetwork',
+    titleKey: 'permission_item_local_network_title',
+    descriptionKey: 'permission_item_local_network_desc',
+  },
 ];
 
 function getStatusLabel(status: PermissionState, language: 'zh' | 'en'): string {
@@ -55,6 +62,14 @@ function getStatusLabel(status: PermissionState, language: 'zh' | 'en'): string 
 
   if (status === 'denied') {
     return language === 'zh' ? '未允许' : 'Denied';
+  }
+
+  if (status === 'requested') {
+    return language === 'zh' ? '已询问' : 'Prompted';
+  }
+
+  if (status === 'unavailable') {
+    return language === 'zh' ? '不可用' : 'Unavailable';
   }
 
   return language === 'zh' ? '待授权' : 'Pending';
@@ -69,6 +84,14 @@ function getStatusColor(status: PermissionState): string {
     return '#FCA5A5';
   }
 
+  if (status === 'requested') {
+    return '#7DD3FC';
+  }
+
+  if (status === 'unavailable') {
+    return '#94A3B8';
+  }
+
   return '#FDE68A';
 }
 
@@ -81,6 +104,10 @@ function toPermissionName(key: PermissionKey, language: 'zh' | 'en'): string {
     return language === 'zh' ? '麦克风' : 'Microphone';
   }
 
+  if (key === 'localNetwork') {
+    return language === 'zh' ? '本地网络' : 'Local Network';
+  }
+
   return language === 'zh' ? '相机' : 'Camera';
 }
 
@@ -90,7 +117,6 @@ export function PermissionsScreen(): JSX.Element {
   const params = useLocalSearchParams<{
     host?: string;
     port?: string;
-    token?: string;
     tls?: string;
     name?: string;
   }>();
@@ -100,7 +126,6 @@ export function PermissionsScreen(): JSX.Element {
   const isPreflightingLocalNetwork = usePermissionsStore((state) => state.isPreflightingLocalNetwork);
   const refreshPermissions = usePermissionsStore((state) => state.refreshPermissions);
   const requestRequiredPermissions = usePermissionsStore((state) => state.requestRequiredPermissions);
-  const preflightLocalNetworkPermission = usePermissionsStore((state) => state.preflightLocalNetworkPermission);
   const getMissingPermissions = usePermissionsStore((state) => state.getMissingPermissions);
   const hasRequiredPermissions = usePermissionsStore((state) => state.hasRequiredPermissions);
   const [isLoadingSnapshot, setIsLoadingSnapshot] = useState(true);
@@ -131,12 +156,6 @@ export function PermissionsScreen(): JSX.Element {
   }, [refreshPermissions]);
 
   useEffect(() => {
-    void preflightLocalNetworkPermission().catch(() => {
-      // Best effort local-network preflight.
-    });
-  }, [preflightLocalNetworkPermission]);
-
-  useEffect(() => {
     if (!allGranted) {
       return;
     }
@@ -145,7 +164,6 @@ export function PermissionsScreen(): JSX.Element {
       Object.entries({
         host: typeof params.host === 'string' ? params.host : undefined,
         port: typeof params.port === 'string' ? params.port : undefined,
-        token: typeof params.token === 'string' ? params.token : undefined,
         tls: typeof params.tls === 'string' ? params.tls : undefined,
         name: typeof params.name === 'string' ? params.name : undefined,
       }).filter((entry): entry is [string, string] => typeof entry[1] === 'string' && entry[1].trim().length > 0),
@@ -160,11 +178,13 @@ export function PermissionsScreen(): JSX.Element {
     }
 
     router.replace(activeProfileId ? '/(tabs)/dashboard' : '/connection');
-  }, [activeProfileId, allGranted, params.host, params.name, params.port, params.tls, params.token, router]);
+  }, [activeProfileId, allGranted, params.host, params.name, params.port, params.tls, router]);
 
   const handleGrantPermissions = async (): Promise<void> => {
     try {
-      const nextPermissions = await requestRequiredPermissions();
+      const nextPermissions = await requestRequiredPermissions({
+        host: typeof params.host === 'string' ? params.host : undefined,
+      });
       const deniedPermissions = getMissingPermissions(nextPermissions);
 
       if (deniedPermissions.length === 0) {
@@ -173,7 +193,6 @@ export function PermissionsScreen(): JSX.Element {
           Object.entries({
             host: typeof params.host === 'string' ? params.host : undefined,
             port: typeof params.port === 'string' ? params.port : undefined,
-            token: typeof params.token === 'string' ? params.token : undefined,
             tls: typeof params.tls === 'string' ? params.tls : undefined,
             name: typeof params.name === 'string' ? params.name : undefined,
           }).filter((entry): entry is [string, string] => typeof entry[1] === 'string' && entry[1].trim().length > 0),
@@ -247,6 +266,7 @@ export function PermissionsScreen(): JSX.Element {
           <Text style={styles.tipsText}>{t('permission_tip_camera')}</Text>
           <Text style={styles.tipsText}>{t('permission_tip_photos')}</Text>
           <Text style={styles.tipsText}>{t('permission_tip_microphone')}</Text>
+          <Text style={styles.tipsText}>{t('permission_tip_local_network')}</Text>
         </View>
 
         <View style={styles.permissionList}>

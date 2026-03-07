@@ -11,7 +11,7 @@ import { z, ZodError, type ZodSchema } from 'zod';
 import { useConnectionStore } from '../../features/connection/store/connectionStore';
 import { buildGatewayBaseUrl } from '../utils/network';
 import { resolveGatewayProfileAuth, toGatewayTokenState } from './gatewayAuth';
-import { shouldRetryRequest, toApiClientError, type RequestMetaConfig } from './types';
+import { resolveRetryDelayMs, shouldRetryRequest, toApiClientError, type RequestMetaConfig } from './types';
 
 const MAX_RETRY_COUNT = 2;
 const RETRY_BASE_DELAY_MS = 350;
@@ -122,7 +122,7 @@ apiClient.interceptors.response.use(
     }
 
     config.retryCount = (config.retryCount ?? 0) + 1;
-    const delayMs = RETRY_BASE_DELAY_MS * 2 ** (config.retryCount - 1);
+    const delayMs = resolveRetryDelayMs(error, config.retryCount, RETRY_BASE_DELAY_MS);
     await sleep(delayMs);
     return apiClient(config);
   },

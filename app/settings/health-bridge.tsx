@@ -1,6 +1,5 @@
 import { Suspense, lazy } from 'react';
 import { ActivityIndicator, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { adaptiveColor, createAdaptiveStyles } from '../../src/theme/adaptiveStyles';
 
@@ -19,11 +18,11 @@ function RouteFallback(): JSX.Element {
 
 export default function HealthBridgeRoute(): JSX.Element {
   return (
-    <SafeAreaView style={styles.safeArea} edges={['top']}>
+    <View style={styles.safeArea}>
       <Suspense fallback={<RouteFallback />}>
         <HealthBridgeScreen />
       </Suspense>
-    </SafeAreaView>
+    </View>
   );
 }
 

@@ -1,4 +1,5 @@
 import { appStorage } from '../../../lib/mmkv/storage';
+import { useAppPreferencesStore } from '../../settings/store/preferencesStore';
 import type { LocalChatMessage } from '../types';
 
 const SESSION_MESSAGES_PREFIX = 'chat:messages:';
@@ -43,6 +44,10 @@ function ensureSessionInIndex(sessionId: string): void {
   writeSessionIndex([...index, sessionId]);
 }
 
+function shouldPersistSessionMessages(): boolean {
+  return useAppPreferencesStore.getState().persistChatTranscripts !== false;
+}
+
 function flushSession(sessionId: string): void {
   const timer = writeTimers.get(sessionId);
   if (timer) {
@@ -61,6 +66,10 @@ function flushSession(sessionId: string): void {
 }
 
 export function readPersistedSessionMessages(sessionId: string): LocalChatMessage[] {
+  if (!shouldPersistSessionMessages()) {
+    return [];
+  }
+
   const pending = pendingWrites.get(sessionId);
   if (pending) {
     return pending;
@@ -84,6 +93,11 @@ export function readPersistedSessionMessages(sessionId: string): LocalChatMessag
 }
 
 export function schedulePersistSessionMessages(sessionId: string, messages: LocalChatMessage[]): void {
+  if (!shouldPersistSessionMessages()) {
+    removePersistedSessionMessages(sessionId);
+    return;
+  }
+
   pendingWrites.set(sessionId, messages);
 
   const existing = writeTimers.get(sessionId);
@@ -118,6 +132,11 @@ export function removePersistedSessionMessages(sessionId: string): void {
 }
 
 export function prunePersistedSessionMessages(validSessionIds: Set<string>): void {
+  if (!shouldPersistSessionMessages()) {
+    clearAllPersistedSessionMessages();
+    return;
+  }
+
   const index = readSessionIndex();
   const nextIndex: string[] = [];
 
@@ -132,5 +151,17 @@ export function prunePersistedSessionMessages(validSessionIds: Set<string>): voi
 
   if (nextIndex.length !== index.length) {
     writeSessionIndex(nextIndex);
+  }
+}
+
+export function clearAllPersistedSessionMessages(): void {
+  const index = readSessionIndex();
+
+  for (const sessionId of index) {
+    removePersistedSessionMessages(sessionId);
+  }
+
+  if (index.length > 0) {
+    writeSessionIndex([]);
   }
 }

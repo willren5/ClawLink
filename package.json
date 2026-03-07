@@ -14,6 +14,7 @@
     "verify": "npm run lint && npm run test && npm run typecheck"
   },
   "dependencies": {
+    "@sentry/react-native": "^8.3.0",
     "axios": "^1.13.6",
     "expo": "~55.0.4",
     "expo-audio": "~55.0.8",

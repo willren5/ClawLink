@@ -69,6 +69,7 @@ exports.AgentDetailResponseSchema = zod_1.z.object({
 exports.AgentLogsResponseSchema = zod_1.z.object({
     agentId: zod_1.z.string().min(1),
     logs: zod_1.z.array(zod_1.z.string()),
+    hasMore: zod_1.z.boolean().optional(),
 });
 exports.AgentLogStreamEventSchema = zod_1.z.object({
     level: zod_1.z.enum(['DEBUG', 'INFO', 'WARN', 'ERROR']).catch('INFO'),

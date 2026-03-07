@@ -736,7 +736,7 @@ export async function createAgent(payload: CreateAgentRequest): Promise<CreateAg
   const apiErrors: string[] = [];
   for (const path of apiCreatePaths) {
     try {
-      return await apiPost(path, parsedPayload, CreateAgentResponseSchema);
+      return await apiPost(path, parsedPayload, CreateAgentResponseSchema, { skipRetry: true });
     } catch (error: unknown) {
       const reason = error instanceof Error ? error.message : String(error);
       apiErrors.push(`${path}: ${reason}`);
@@ -945,15 +945,22 @@ export async function getAgentDetail(agentId: string): Promise<AgentDetailRespon
   }
 }
 
-export async function getAgentLogs(agentId: string): Promise<AgentLogsResponse> {
+export async function getAgentLogs(
+  agentId: string,
+  options: {
+    limit?: number;
+  } = {},
+): Promise<AgentLogsResponse> {
+  const limit = Math.max(20, Math.min(500, Math.floor(options.limit ?? 100)));
+
   try {
-    return await apiGet(`/api/agents/${agentId}/logs?limit=100`, AgentLogsResponseSchema);
+    return await apiGet(`/api/agents/${agentId}/logs?limit=${limit}`, AgentLogsResponseSchema);
   } catch {
     const attempts: Array<{ method: string; params: Record<string, unknown> }> = [
-      { method: 'agents.logs', params: { agentId, limit: 100 } },
-      { method: 'agent.logs', params: { agentId, limit: 100 } },
-      { method: 'logs.tail', params: { agentId, limit: 180 } },
-      { method: 'logs.tail', params: { limit: 180 } },
+      { method: 'agents.logs', params: { agentId, limit } },
+      { method: 'agent.logs', params: { agentId, limit } },
+      { method: 'logs.tail', params: { agentId, limit: Math.max(limit, 180) } },
+      { method: 'logs.tail', params: { limit: Math.max(limit, 180) } },
     ];
     let fallbackError: unknown = null;
 
@@ -976,7 +983,8 @@ export async function getAgentLogs(agentId: string): Promise<AgentLogsResponse> 
 
         return AgentLogsResponseSchema.parse({
           agentId,
-          logs: selected,
+          logs: selected.slice(-limit),
+          hasMore: selected.length >= limit,
         });
       } catch (error: unknown) {
         fallbackError = error;
@@ -991,20 +999,23 @@ export async function getAgentLogs(agentId: string): Promise<AgentLogsResponse> 
     return AgentLogsResponseSchema.parse({
       agentId,
       logs: [`[log-unavailable] ${message}`],
+      hasMore: false,
     });
   }
 }
 
 export async function restartAgent(agentId: string): Promise<ActionResponse> {
-  return apiPost(`/api/agents/${agentId}/restart`, undefined, ActionResponseSchema);
+  return apiPost(`/api/agents/${agentId}/restart`, undefined, ActionResponseSchema, { skipRetry: true });
 }
 
 export async function toggleAgent(agentId: string, enabled: boolean): Promise<ActionResponse> {
-  return apiPost(`/api/agents/${agentId}/${enabled ? 'enable' : 'disable'}`, undefined, ActionResponseSchema);
+  return apiPost(`/api/agents/${agentId}/${enabled ? 'enable' : 'disable'}`, undefined, ActionResponseSchema, {
+    skipRetry: true,
+  });
 }
 
 export async function killAgent(agentId: string): Promise<ActionResponse> {
-  return apiPost(`/api/agents/${agentId}/kill`, undefined, ActionResponseSchema);
+  return apiPost(`/api/agents/${agentId}/kill`, undefined, ActionResponseSchema, { skipRetry: true });
 }
 
 export async function getSkills(): Promise<SkillsResponse> {
@@ -1039,19 +1050,21 @@ export async function getSkills(): Promise<SkillsResponse> {
 }
 
 export async function installSkill(payload: { name: string; version?: string }): Promise<ActionResponse> {
-  return apiPost('/api/skills/install', payload, ActionResponseSchema);
+  return apiPost('/api/skills/install', payload, ActionResponseSchema, { skipRetry: true });
 }
 
 export async function uninstallSkill(name: string): Promise<ActionResponse> {
-  return apiPost(`/api/skills/${encodeURIComponent(name)}/uninstall`, undefined, ActionResponseSchema);
+  return apiPost(`/api/skills/${encodeURIComponent(name)}/uninstall`, undefined, ActionResponseSchema, {
+    skipRetry: true,
+  });
 }
 
 export async function restartGateway(): Promise<ActionResponse> {
-  return apiPost('/api/system/restart', undefined, ActionResponseSchema);
+  return apiPost('/api/system/restart', undefined, ActionResponseSchema, { skipRetry: true });
 }
 
 export async function purgeSessions(): Promise<ActionResponse> {
-  return apiPost('/api/sessions/purge', undefined, ActionResponseSchema);
+  return apiPost('/api/sessions/purge', undefined, ActionResponseSchema, { skipRetry: true });
 }
 
 export async function getSessionLastHash(sessionId: string): Promise<SessionLastHashResponse> {

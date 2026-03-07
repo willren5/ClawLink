@@ -21,6 +21,7 @@
 		BB2F792D24A3F905000567C9 /* Expo.plist in Resources */ = {isa = PBXBuildFile; fileRef = BB2F792C24A3F905000567C9 /* Expo.plist */; };
 		BEB0236F0CBF7926D5348C49 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D11A82E1515FF6E341A57C5E /* Foundation.framework */; };
 		C1A7B2D3E4F5061728394001 /* ClawLinkAppIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A7B2D3E4F5061728394002 /* ClawLinkAppIntents.swift */; };
+		C1A7B2D3E4F5061728394003 /* ClawLinkIntentShared.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A7B2D3E4F5061728394004 /* ClawLinkIntentShared.swift */; };
 		C46B30ACD66248B212E678F6 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 4503D052D12753541560E0DC /* PrivacyInfo.xcprivacy */; };
 		F11748422D0307B40044C1D9 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = F11748412D0307B40044C1D9 /* AppDelegate.swift */; };
 		FAA84BCA5987EFF88119428C /* ClawLinkWidgetsBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6BA29F7AD9CD7CE3684B280B /* ClawLinkWidgetsBundle.swift */; };
@@ -67,6 +68,7 @@
 		AA286B85B6C04FC6940260E9 /* SplashScreen.storyboard */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = file.storyboard; name = SplashScreen.storyboard; path = ClawLink/SplashScreen.storyboard; sourceTree = "<group>"; };
 		BB2F792C24A3F905000567C9 /* Expo.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; path = Expo.plist; sourceTree = "<group>"; };
 		C1A7B2D3E4F5061728394002 /* ClawLinkAppIntents.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = ClawLinkAppIntents.swift; path = ClawLink/Intents/ClawLinkAppIntents.swift; sourceTree = "<group>"; };
+		C1A7B2D3E4F5061728394004 /* ClawLinkIntentShared.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = ClawLinkIntentShared.swift; path = ClawLink/Intents/ClawLinkIntentShared.swift; sourceTree = "<group>"; };
 		C92DFA667891D33291453B6F /* Pods-ClawLink.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-ClawLink.debug.xcconfig"; path = "Target Support Files/Pods-ClawLink/Pods-ClawLink.debug.xcconfig"; sourceTree = "<group>"; };
 		D11A82E1515FF6E341A57C5E /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
 		ED07CFF360376BA0BF8CEFAF /* ClawLinkWidgetsExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = ClawLinkWidgetsExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -110,6 +112,7 @@
 			children = (
 				F11748412D0307B40044C1D9 /* AppDelegate.swift */,
 				C1A7B2D3E4F5061728394002 /* ClawLinkAppIntents.swift */,
+				C1A7B2D3E4F5061728394004 /* ClawLinkIntentShared.swift */,
 				A1B2C3D4E5F60718293A4B03 /* ClawSurfaceBridge.swift */,
 				A1B2C3D4E5F60718293A4B04 /* ClawSurfaceBridge.m */,
 				F11748442D0722820044C1D9 /* ClawLink-Bridging-Header.h */,
@@ -362,7 +365,7 @@
 			inputPaths = (
 				"$(SRCROOT)/.xcode.env",
 				"$(SRCROOT)/.xcode.env.local",
-				"$(SRCROOT)/ClawLink/ClawLink.entitlements",
+				"$(SRCROOT)/ClawLink/ClawLink.Debug.entitlements",
 				"$(SRCROOT)/Pods/Target Support Files/Pods-ClawLink/expo-configure-project.sh",
 			);
 			name = "[Expo] Configure project";
@@ -443,6 +446,7 @@
 				A1B2C3D4E5F60718293A4B01 /* ClawSurfaceBridge.swift in Sources */,
 				A1B2C3D4E5F60718293A4B02 /* ClawSurfaceBridge.m in Sources */,
 				C1A7B2D3E4F5061728394001 /* ClawLinkAppIntents.swift in Sources */,
+				C1A7B2D3E4F5061728394003 /* ClawLinkIntentShared.swift in Sources */,
 				F11748422D0307B40044C1D9 /* AppDelegate.swift in Sources */,
 				4D1302B5343DBECEBC67EAE6 /* ExpoModulesProvider.swift in Sources */,
 			);
@@ -478,7 +482,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CLANG_ENABLE_MODULES = YES;
-				CODE_SIGN_ENTITLEMENTS = ClawLink/ClawLink.entitlements;
+				CODE_SIGN_ENTITLEMENTS = ClawLink/ClawLink.Debug.entitlements;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 23XH23N447;
 				ENABLE_BITCODE = NO;

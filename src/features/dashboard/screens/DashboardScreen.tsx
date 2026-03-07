@@ -23,6 +23,7 @@ import { useConnectionStore } from '../../connection/store/connectionStore';
 import { getVisibleGatewayProfiles } from '../../connection/debugProfile';
 import { useI18n } from '../../../lib/i18n';
 import { useAppPreferencesStore } from '../../settings/store/preferencesStore';
+import { evaluateDailyBudget, formatCurrencyAmount, usePricingStore } from '../../settings/store/pricingStore';
 import { useDashboardStore } from '../store/dashboardStore';
 import type { DashboardRefreshInterval } from '../types';
 import { RequestVolumeChart } from '../components/RequestVolumeChart';
@@ -54,10 +55,6 @@ function formatRefreshLabel(
 
 function formatNumber(value: number): string {
   return Intl.NumberFormat('en-US').format(value);
-}
-
-function formatCurrency(value: number): string {
-  return `$${value.toFixed(2)}`;
 }
 
 function toLocalDateKey(timestamp: number): string {
@@ -159,6 +156,8 @@ export function DashboardScreen(): JSX.Element {
   const tokenRefreshAvailable = useConnectionStore((state) => state.tokenRefreshAvailable);
   const switchGatewayProfile = useConnectionStore((state) => state.switchGatewayProfile);
   const dashboardSectionOrder = useAppPreferencesStore((state) => state.dashboardSectionOrder);
+  const pricingCurrency = usePricingStore((state) => state.currency);
+  const dailyBudget = usePricingStore((state) => state.dailyBudget);
 
   const { snapshot, costHistory, costHistorySource, refreshInterval, setRefreshInterval, refresh, lastError } = useDashboardStore(
     useShallow((state) => ({
@@ -282,6 +281,35 @@ export function DashboardScreen(): JSX.Element {
   const totalWindowRequests = useMemo(
     () => costTrendPoints.reduce((sum, item) => sum + item.requests, 0),
     [costTrendPoints],
+  );
+  const dailyBudgetStatus = useMemo(
+    () => evaluateDailyBudget(snapshot.cards.estimatedCostToday, dailyBudget),
+    [dailyBudget, snapshot.cards.estimatedCostToday],
+  );
+  const budgetBarColor = useMemo(() => {
+    if (dailyBudgetStatus.state === 'exceeded') {
+      return mapColorForMode('#EF4444', themeMode);
+    }
+    if (dailyBudgetStatus.state === 'near_limit') {
+      return mapColorForMode('#F59E0B', themeMode);
+    }
+    return mapColorForMode('#22C55E', themeMode);
+  }, [dailyBudgetStatus.state, themeMode]);
+  const budgetStatusLabel = useMemo(() => {
+    if (dailyBudgetStatus.state === 'exceeded') {
+      return t('dashboard_budget_status_exceeded');
+    }
+    if (dailyBudgetStatus.state === 'near_limit') {
+      return t('dashboard_budget_status_near');
+    }
+    if (dailyBudgetStatus.state === 'within_limit') {
+      return t('dashboard_budget_status_within');
+    }
+    return t('dashboard_budget_unset');
+  }, [dailyBudgetStatus.state, t]);
+  const formatCost = useCallback(
+    (value: number) => formatCurrencyAmount(value, pricingCurrency, language),
+    [language, pricingCurrency],
   );
 
   const selectedChannel = useMemo(
@@ -693,14 +721,24 @@ export function DashboardScreen(): JSX.Element {
       <View style={styles.gatewayPanel}>
         <View style={styles.gatewayHeader}>
           <Text style={styles.gatewayTitle}>{t('dashboard_gateway_panel_title')}</Text>
-          <Pressable
-            style={styles.gatewayManageButton}
-            onPress={() => {
-              router.push('/settings/gateways');
-            }}
-          >
-            <Text style={styles.gatewayManageText}>{t('dashboard_gateway_manage')}</Text>
-          </Pressable>
+          <View style={styles.gatewayHeaderActions}>
+            <Pressable
+              style={styles.gatewayManageButton}
+              onPress={() => {
+                router.push('/settings');
+              }}
+            >
+              <Text style={styles.gatewayManageText}>{t('tabs_settings')}</Text>
+            </Pressable>
+            <Pressable
+              style={styles.gatewayManageButton}
+              onPress={() => {
+                router.push('/settings/gateways');
+              }}
+            >
+              <Text style={styles.gatewayManageText}>{t('dashboard_gateway_manage')}</Text>
+            </Pressable>
+          </View>
         </View>
 
         {activeProfile ? (
@@ -776,8 +814,12 @@ export function DashboardScreen(): JSX.Element {
 
           <View style={styles.card}>
             <Text style={styles.cardTitle}>{t('dashboard_title_cost')}</Text>
-            <Text style={styles.cardValue}>{formatCurrency(snapshot.cards.estimatedCostToday)}</Text>
-            <Text style={styles.cardHint}>{t('dashboard_pricing_hint')}</Text>
+            <Text style={styles.cardValue}>{formatCost(snapshot.cards.estimatedCostToday)}</Text>
+            <Text style={styles.cardHint}>
+              {dailyBudgetStatus.dailyBudget === null
+                ? t('dashboard_pricing_hint')
+                : `${formatCost(dailyBudgetStatus.spendToday)} / ${formatCost(dailyBudgetStatus.dailyBudget)}`}
+            </Text>
           </View>
         </ScrollView>
       </View>
@@ -811,11 +853,40 @@ export function DashboardScreen(): JSX.Element {
             })}
           </View>
         </View>
-        <CostHistoryChart points={costTrendPoints} themeMode={themeMode} />
+        <CostHistoryChart points={costTrendPoints} themeMode={themeMode} totalCostLabel={formatCost(totalWindowCost)} />
         <View style={styles.costSummaryRow}>
-          <Text style={styles.detailMeta}>{formatCurrency(totalWindowCost)}</Text>
+          <Text style={styles.detailMeta}>{formatCost(totalWindowCost)}</Text>
           <Text style={styles.detailMeta}>{formatNumber(totalWindowTokens)} tokens</Text>
           <Text style={styles.detailMeta}>{formatNumber(totalWindowRequests)} req</Text>
+        </View>
+        <View style={styles.usageCard}>
+          <View style={styles.usageHeader}>
+            <Text style={styles.usageName}>{t('dashboard_budget_title')}</Text>
+            <Text style={styles.usageMeta}>
+              {dailyBudgetStatus.dailyBudget === null ? t('dashboard_budget_unset') : `${Math.round(dailyBudgetStatus.progress * 100)}%`}
+            </Text>
+          </View>
+          {dailyBudgetStatus.dailyBudget === null ? (
+            <Text style={styles.detailMeta}>{t('dashboard_budget_hint')}</Text>
+          ) : (
+            <>
+              <View style={styles.usageTrack}>
+                <View
+                  style={[
+                    styles.usageFill,
+                    {
+                      width: `${Math.round(dailyBudgetStatus.progressClamped * 100)}%`,
+                      backgroundColor: budgetBarColor,
+                    },
+                  ]}
+                />
+              </View>
+              <Text style={styles.detailMeta}>
+                {formatCost(dailyBudgetStatus.spendToday)} / {formatCost(dailyBudgetStatus.dailyBudget)}
+              </Text>
+              <Text style={styles.detailMeta}>{budgetStatusLabel}</Text>
+            </>
+          )}
         </View>
       </View>
 
@@ -958,16 +1029,16 @@ const styles = createAdaptiveStyles({
     gap: 10,
   },
   healthBannerHealthy: {
-    borderColor: '#14532D',
-    backgroundColor: '#0F2D1D',
+    borderColor: '#1D8A5A',
+    backgroundColor: '#062E1F',
   },
   healthBannerDegraded: {
-    borderColor: '#78350F',
-    backgroundColor: '#2B1B0E',
+    borderColor: '#D97A17',
+    backgroundColor: '#341D05',
   },
   healthBannerOffline: {
-    borderColor: '#7F1D1D',
-    backgroundColor: '#1F1111',
+    borderColor: '#D6526E',
+    backgroundColor: '#350A12',
   },
   healthDot: {
     width: 10,
@@ -1008,12 +1079,12 @@ const styles = createAdaptiveStyles({
     gap: 2,
   },
   healthTitle: {
-    color: '#F8FAFC',
+    color: '#F7FFF9',
     fontSize: 13,
     fontWeight: '700',
   },
   healthBody: {
-    color: '#CBD5E1',
+    color: '#E7EEF7',
     fontSize: 11,
   },
   gatewayPanel: {
@@ -1078,6 +1149,11 @@ const styles = createAdaptiveStyles({
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 10,
+  },
+  gatewayHeaderActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
   },
   gatewayTitle: {
     color: '#F8FAFC',
@@ -1247,22 +1323,22 @@ const styles = createAdaptiveStyles({
   costWindowChip: {
     borderRadius: 999,
     borderWidth: 1,
-    borderColor: '#334155',
+    borderColor: '#465262',
     paddingHorizontal: 10,
     paddingVertical: 4,
-    backgroundColor: '#0F172A',
+    backgroundColor: '#121927',
   },
   costWindowChipSelected: {
-    borderColor: '#22D3EE',
-    backgroundColor: '#123548',
+    borderColor: '#59B7FF',
+    backgroundColor: '#113A5B',
   },
   costWindowChipText: {
-    color: '#94A3B8',
+    color: '#D5DCE6',
     fontSize: 11,
     fontWeight: '700',
   },
   costWindowChipTextSelected: {
-    color: '#E0F2FE',
+    color: '#F3FBFF',
   },
   costSummaryRow: {
     flexDirection: 'row',

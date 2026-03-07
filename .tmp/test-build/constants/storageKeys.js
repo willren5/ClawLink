@@ -5,6 +5,7 @@ exports.STORAGE_KEYS = {
     CONNECTION_STORE: 'connection-store',
     PERMISSION_STORE: 'permission-store',
     APP_PREFERENCES_STORE: 'app-preferences-store',
+    PRICING_STORE: 'pricing-store',
     DASHBOARD_STORE: 'dashboard-store',
     CHAT_STORE: 'chat-store',
     AGENTS_RUNTIME_STORE: 'agents-runtime-store',

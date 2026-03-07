@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=1242, initial-scale=1" />
+    <link rel="stylesheet" href="./shared.css" />
+    <title>ClawLink Features</title>
+    <style>
+      .features {
+        padding: 70px 64px 64px;
+      }
+
+      .features .header {
+        display: grid;
+        grid-template-columns: 1fr 360px;
+        gap: 24px;
+        align-items: end;
+      }
+
+      .features .intro {
+        padding: 26px 30px;
+      }
+
+      .features .feature-grid {
+        margin-top: 32px;
+      }
+
+      .features .screen-card {
+        height: 328px;
+      }
+
+      .features .feature-card {
+        padding: 18px;
+      }
+
+      .features .feature-label {
+        margin-top: 14px;
+      }
+
+      .features .feature-title {
+        font-size: 32px;
+      }
+
+      .features .feature-copy {
+        font-size: 22px;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="poster dark features">
+      <div class="noise"></div>
+      <section class="header">
+        <div>
+          <div class="topbar" style="background: rgba(255, 255, 255, 0.08); border-color: rgba(255, 255, 255, 0.14); color: #fff7ef">
+            四个日常场景
+          </div>
+          <h1 class="section-title" style="margin-top: 24px">不是一个壳子，<br />而是一套移动工作台</h1>
+          <p class="section-desc">
+            你平时最常开的四个入口，都在一个 App 里，而且每个入口都能给出足够多的信息，不是点进去只有一个空白状态。
+          </p>
+        </div>
+        <aside class="panel intro">
+          <div style="font-size: 22px; color: rgba(255, 247, 239, 0.68); font-weight: 700">适合日常</div>
+          <div style="margin-top: 16px; font-size: 30px; line-height: 1.45; font-weight: 700">
+            远程值守<br />轻量运维<br />移动处理告警
+          </div>
+        </aside>
+      </section>
+
+      <section class="feature-grid">
+        <article class="feature-card">
+          <div class="screen-card"><img src="../dashboard.png" alt="Dashboard screenshot" /></div>
+          <div class="feature-label">Dashboard</div>
+          <div class="feature-title">把“现在什么情况”先讲清楚</div>
+          <div class="feature-copy">网关状态、今日请求、成本趋势、最近活跃时间，不需要先翻日志才知道系统是好是坏。</div>
+        </article>
+        <article class="feature-card">
+          <div class="screen-card"><img src="../agents.png" alt="Agents screenshot" /></div>
+          <div class="feature-label">Agents</div>
+          <div class="feature-title">谁在跑、谁挂了、谁需要处理</div>
+          <div class="feature-copy">Agent 列表不是静态卡片，启停、重启和日志入口都在同一屏，不会来回跳。</div>
+        </article>
+        <article class="feature-card">
+          <div class="screen-card"><img src="../monitor.png" alt="Monitor screenshot" /></div>
+          <div class="feature-label">Monitor</div>
+          <div class="feature-title">日志和主机指标给到同一条视线里</div>
+          <div class="feature-copy">先看 rate limit、异常日志，再看 CPU / RAM / 网络曲线，定位问题比纯文本更快。</div>
+        </article>
+        <article class="feature-card">
+          <div class="screen-card"><img src="../chat.png" alt="Chat screenshot" /></div>
+          <div class="feature-label">Chat</div>
+          <div class="feature-title">真要处理时，直接切进会话继续做</div>
+          <div class="feature-copy">不是只看状态。你可以马上把上下文带进聊天流，继续让 Agent 给出下一步动作。</div>
+        </article>
+      </section>
+    </main>
+  </body>
+</html>

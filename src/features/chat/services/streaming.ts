@@ -27,6 +27,7 @@ interface StreamOptions {
   reasoningEffort?: ReasoningEffort;
   message: string;
   attachments?: ChatAttachment[];
+  idempotencyKey?: string;
   signal?: AbortSignal;
   onToken: (chunk: string) => void;
   onToolEvent?: (event: {
@@ -71,6 +72,7 @@ interface ChatCompletionRequestPayload {
   sessionId: string;
   agentId?: string;
   model?: string;
+  idempotencyKey?: string;
   reasoningEffort?: ReasoningEffort;
   reasoning?: {
     effort: ReasoningEffort;
@@ -339,10 +341,6 @@ function toSessionKey(sessionId: string, agentId?: string): string {
   return sessionId;
 }
 
-function createIdempotencyKey(): string {
-  return `claw-link-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-}
-
 function buildConnectPayload(
   token: string,
   profile: { role?: string; scopes?: string[]; mode?: string },
@@ -467,6 +465,7 @@ function extractImmediateAssistantText(payload: unknown): string {
 async function runChatViaWsRequest(options: StreamOptions): Promise<string> {
   const sessionKey = toSessionKey(options.sessionId, options.agentId);
   const messageText = options.message.trim() ? options.message : '[Image]';
+  const idempotencyKey = options.idempotencyKey;
   const attachments =
     options.attachments?.map((item) => ({
       type: item.type,
@@ -495,7 +494,7 @@ async function runChatViaWsRequest(options: StreamOptions): Promise<string> {
         params: {
           sessionKey: sessionCandidate,
           message: messageText,
-          idempotencyKey: createIdempotencyKey(),
+          ...(idempotencyKey ? { idempotencyKey } : {}),
           ...(options.model ? { model: options.model } : {}),
           ...(options.reasoningEffort ? { reasoningEffort: options.reasoningEffort } : {}),
           ...(attachments.length > 0 ? { attachments } : {}),
@@ -866,7 +865,6 @@ async function streamChatViaWebSocket(
           })();
 
           const chatSendCandidates = sessionKeyCandidates.flatMap((candidateSessionKey) => {
-            const idempotencyKey = createIdempotencyKey();
             const chatAttachments =
               attachments.length > 0
                 ? attachments.map((item) => ({
@@ -880,13 +878,13 @@ async function streamChatViaWebSocket(
               {
                 sessionKey: candidateSessionKey,
                 message: messageText,
-                idempotencyKey,
+                ...(options.idempotencyKey ? { idempotencyKey: options.idempotencyKey } : {}),
                 deliver: false,
               },
               {
                 sessionKey: candidateSessionKey,
                 message: messageText,
-                idempotencyKey,
+                ...(options.idempotencyKey ? { idempotencyKey: options.idempotencyKey } : {}),
                 deliver: false,
                 ...(chatAttachments ? { attachments: chatAttachments } : {}),
               },
@@ -896,7 +894,7 @@ async function streamChatViaWebSocket(
                   role: 'user',
                   content: messageText,
                 },
-                idempotencyKey,
+                ...(options.idempotencyKey ? { idempotencyKey: options.idempotencyKey } : {}),
                 deliver: false,
                 ...(chatAttachments ? { attachments: chatAttachments } : {}),
               },
@@ -906,25 +904,25 @@ async function streamChatViaWebSocket(
               {
                 sessionId: candidateSessionKey,
                 message: messageText,
-                idempotencyKey,
+                ...(options.idempotencyKey ? { idempotencyKey: options.idempotencyKey } : {}),
                 ...(chatAttachments ? { attachments: chatAttachments } : {}),
               },
               {
                 session: candidateSessionKey,
                 message: messageText,
-                idempotencyKey,
+                ...(options.idempotencyKey ? { idempotencyKey: options.idempotencyKey } : {}),
                 ...(chatAttachments ? { attachments: chatAttachments } : {}),
               },
               {
                 sessionKey: candidateSessionKey,
                 text: messageText,
-                idempotencyKey,
+                ...(options.idempotencyKey ? { idempotencyKey: options.idempotencyKey } : {}),
                 ...(chatAttachments ? { attachments: chatAttachments } : {}),
               },
               {
                 sessionKey: candidateSessionKey,
                 content: messageText,
-                idempotencyKey,
+                ...(options.idempotencyKey ? { idempotencyKey: options.idempotencyKey } : {}),
                 ...(chatAttachments ? { attachments: chatAttachments } : {}),
               },
             ];
@@ -1109,6 +1107,29 @@ function extractDelta(payload: StreamResponseChunk): string {
   return first.delta?.content ?? first.text ?? '';
 }
 
+function isExplicitStreamCompletion(payload: unknown): boolean {
+  if (!isRecord(payload)) {
+    return false;
+  }
+
+  if (payload.done === true) {
+    return true;
+  }
+
+  const state = typeof payload.state === 'string' ? payload.state.toLowerCase() : '';
+  if (state === 'done' || state === 'completed' || state === 'final') {
+    return true;
+  }
+
+  const status = typeof payload.status === 'string' ? payload.status.toLowerCase() : '';
+  if (status === 'done' || status === 'completed' || status === 'final') {
+    return true;
+  }
+
+  const choices = Array.isArray(payload.choices) ? payload.choices : [];
+  return choices.some((choice) => isRecord(choice) && typeof choice.finish_reason === 'string' && choice.finish_reason.trim().length > 0);
+}
+
 function parseSseFrame(frame: string): string[] {
   const lines = frame.split('\n');
   const dataLines = lines
@@ -1176,6 +1197,7 @@ function buildRequestPayload(options: StreamOptions, mode: ImageTransportMode): 
     stream: true,
     sessionId: options.sessionId,
     model: options.model,
+    idempotencyKey: options.idempotencyKey,
     reasoningEffort: options.reasoningEffort,
     reasoning: options.reasoningEffort ? { effort: options.reasoningEffort } : undefined,
     attachments: useLegacyContent ? undefined : buildGatewayAttachments(options.attachments),
@@ -1322,6 +1344,7 @@ async function streamChatCompletionWithFallback(
     const decoder = new TextDecoder();
     let collected = '';
     let buffered = '';
+    let completed = false;
 
     while (true) {
       const { done, value } = await reader.read();
@@ -1337,11 +1360,15 @@ async function streamChatCompletionWithFallback(
         const parts = parseSseFrame(frame);
         for (const part of parts) {
           if (part === '[DONE]') {
+            completed = true;
             return collected;
           }
 
           try {
             const parsedUnknown = JSON.parse(part) as unknown;
+            if (isExplicitStreamCompletion(parsedUnknown)) {
+              completed = true;
+            }
             const toolSummary = extractToolCallSummary(parsedUnknown);
             if (toolSummary) {
               updateAgentActivityTask(`Using ${toolSummary}`);
@@ -1371,6 +1398,10 @@ async function streamChatCompletionWithFallback(
           }
         }
       }
+    }
+
+    if (!completed) {
+      throw new Error('Stream ended before completion marker.');
     }
 
     return collected;

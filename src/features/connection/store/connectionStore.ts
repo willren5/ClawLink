@@ -3,6 +3,7 @@ import { createJSONStorage, persist } from 'zustand/middleware';
 
 import { STORAGE_KEYS } from '../../../constants/storageKeys';
 import { resolveGatewayProfileAuth, toGatewayTokenState } from '../../../lib/api/gatewayAuth';
+import { isHiddenDebugProfileEnabled } from '../../../lib/features/featureFlags';
 import { mmkvZustandStorage } from '../../../lib/mmkv/zustandStorage';
 import { saveGatewayToken, deleteGatewayToken } from '../../../lib/secure/tokenVault';
 import { buildGatewayBaseUrl, normalizeHost, parseGatewayEndpointInput } from '../../../lib/utils/network';
@@ -42,6 +43,7 @@ interface ConnectionStoreState {
   removeGatewayProfile: (profileId: string) => Promise<void>;
   pingActiveGateway: () => Promise<void>;
   pollAllGateways: () => Promise<void>;
+  refreshGatewayFleet: () => Promise<void>;
   disconnect: () => void;
   dismissDisconnectBanner: () => void;
 }
@@ -412,6 +414,10 @@ export const useConnectionStore = create<ConnectionStoreState>()(
         }));
       },
 
+      refreshGatewayFleet: async () => {
+        await Promise.allSettled([get().pingActiveGateway(), get().pollAllGateways()]);
+      },
+
       disconnect: () => {
         set((state) => ({
           connectionStatus: 'disconnected',
@@ -441,12 +447,11 @@ export const useConnectionStore = create<ConnectionStoreState>()(
       onRehydrateStorage: () => () => {
         const state = useConnectionStore.getState();
         const rawProfiles = Array.isArray(state.profiles) ? state.profiles : [];
+        const sanitizedBaseProfiles = rawProfiles
+          .map((profile) => sanitizeGatewayProfile(profile))
+          .filter((profile): profile is GatewayProfile => profile !== null);
         const sanitizedProfiles = sortProfiles(
-          ensureHiddenDebugProfile(
-            rawProfiles
-              .map((profile) => sanitizeGatewayProfile(profile))
-              .filter((profile): profile is GatewayProfile => profile !== null),
-          ),
+          __DEV__ ? ensureHiddenDebugProfile(sanitizedBaseProfiles) : sanitizedBaseProfiles.filter((profile) => !isHiddenDebugProfile(profile)),
         );
         const nextActiveProfile =
           typeof state.activeProfileId === 'string'
@@ -486,9 +491,11 @@ export const useConnectionStore = create<ConnectionStoreState>()(
           disconnectBannerVisible: false,
         });
 
-        void saveGatewayToken(HIDDEN_DEBUG_PROFILE_ID, HIDDEN_DEBUG_TOKEN).catch(() => {
-          // Best effort seed for hidden debug profile.
-        });
+        if (__DEV__ && isHiddenDebugProfileEnabled()) {
+          void saveGatewayToken(HIDDEN_DEBUG_PROFILE_ID, HIDDEN_DEBUG_TOKEN).catch(() => {
+            // Best effort seed for hidden debug profile.
+          });
+        }
       },
     },
   ),

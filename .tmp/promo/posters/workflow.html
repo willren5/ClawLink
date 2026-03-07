@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=1242, initial-scale=1" />
+    <link rel="stylesheet" href="./shared.css" />
+    <title>ClawLink Workflow</title>
+    <style>
+      .workflow {
+        background:
+          radial-gradient(circle at 80% 10%, rgba(185, 214, 205, 0.52), transparent 24%),
+          radial-gradient(circle at 10% 60%, rgba(240, 198, 206, 0.4), transparent 20%),
+          linear-gradient(180deg, #f6f0e7 0%, #f7f2eb 48%, #eef3f1 100%);
+      }
+
+      .workflow .wrap {
+        position: relative;
+        padding: 70px 64px 60px;
+      }
+
+      .workflow .title {
+        max-width: 760px;
+      }
+
+      .workflow .layout {
+        margin-top: 36px;
+      }
+
+      .workflow .chat-shot {
+        height: 1180px;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="poster workflow">
+      <div class="noise"></div>
+      <div class="wrap">
+        <div class="topbar">从异常到处理 <span>在手机上闭环</span></div>
+        <h1 class="hero-title title" style="font-size: 82px">不是只会提醒你，<br />而是能让你接着处理</h1>
+        <p class="hero-subtitle" style="max-width: 760px">
+          真正有用的移动端，不是把“告警来了”推到锁屏上，而是把下一步也准备好。看到异常以后，继续查、继续问、继续做。
+        </p>
+
+        <section class="workflow-grid layout">
+          <div class="phone chat-shot"><img src="../chat.png" alt="Chat screenshot" /></div>
+          <div style="display: grid; gap: 20px">
+            <div class="step-list">
+              <section class="step">
+                <div class="step-num">01</div>
+                <h3>先在 Dashboard 看整体状态</h3>
+                <p>先确认网关是不是在线、请求量有没有冲高、是不是只有某个 channel 或某个 agent 出问题。</p>
+              </section>
+              <section class="step">
+                <div class="step-num">02</div>
+                <h3>再切到 Monitor 看日志和指标</h3>
+                <p>用 rate limit、错误日志和主机曲线判断问题是网络、上游限流，还是 agent 本身卡住。</p>
+              </section>
+              <section class="step">
+                <div class="step-num">03</div>
+                <h3>最后带着上下文进入 Chat</h3>
+                <p>不用回到电脑，把问题直接丢给当前 agent，继续让它给出动作、文案或修复思路。</p>
+              </section>
+            </div>
+
+            <div class="mini-stack">
+              <div class="mini-phone"><img src="../monitor.png" alt="Monitor screenshot" /></div>
+              <div class="mini-phone"><img src="../agents.png" alt="Agents screenshot" /></div>
+            </div>
+
+            <div class="footer-note">
+              适合需要“看得住”和“接得上”的 OpenClaw Gateway 用户。不是演示面板，而是移动端操作流。
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
+  </body>
+</html>

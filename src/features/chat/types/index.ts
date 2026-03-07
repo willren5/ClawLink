@@ -7,6 +7,7 @@ export interface ToolTimelineStep {
   id: string;
   kind: ToolTimelineStepKind;
   label: string;
+  details?: string;
   startedAt: number;
   durationMs: number;
   status: 'running' | 'completed';
@@ -42,11 +43,14 @@ export interface ChatAttachmentPreview {
 export interface LocalChatMessage {
   id: string;
   sessionId: string;
+  gatewaySessionId: string;
+  profileId: string;
   role: ChatRole;
   content: string;
   timestamp: number;
   hash: string;
   syncStatus: SyncStatus;
+  serverMessageId?: string;
   agentId?: string;
   attachments?: ChatAttachmentPreview[];
   toolTimeline?: ToolTimelineStep[];
@@ -55,6 +59,8 @@ export interface LocalChatMessage {
 
 export interface LocalChatSession {
   id: string;
+  gatewaySessionId: string;
+  profileId: string;
   agentId?: string;
   title: string;
   updatedAt: number;
@@ -65,15 +71,19 @@ export interface LocalChatSession {
   contextCount: number;
   contextLimit?: number;
   lastUsageAt?: number;
+  lastServerHash?: string;
 }
 
 export interface PendingOutboundMessage {
   messageId: string;
   sessionId: string;
+  gatewaySessionId: string;
+  profileId: string;
   agentId?: string;
   content: string;
   model?: string;
   reasoningEffort?: ReasoningEffort;
   createdAt: number;
+  idempotencyKey: string;
   attachments?: ChatAttachment[];
 }

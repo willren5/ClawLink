@@ -12,12 +12,15 @@ import {
   View,
 } from 'react-native';
 
+import { APP_ERROR_CODES, type AppErrorCode } from '../../../lib/errors/appError';
+import { isExperimentalFeatureEnabled } from '../../../lib/features/featureFlags';
 import { adaptiveColor, createAdaptiveStyles } from '../../../theme/adaptiveStyles';
 import { useAgentsControl } from '../hooks/useAgentsControl';
 import { useSkillManager } from '../hooks/useSkillManager';
 import { useI18n, type I18nKey } from '../../../lib/i18n';
+import { useAppPreferencesStore } from '../../settings/store/preferencesStore';
 import type { AgentListItem } from '../types';
-import type { SecurityFinding } from '../../security/scanner';
+import type { SecurityFinding, SecurityPermission } from '../../security/scanner';
 import type { SkillScanProgress, SkillSecurityReport } from '../types/skills';
 
 function statusColor(status: AgentListItem['status']): string {
@@ -45,6 +48,23 @@ function severityColor(severity: SecurityFinding['severity']): string {
       return '#60A5FA';
     default:
       return '#94A3B8';
+  }
+}
+
+function permissionLabel(permission: SecurityPermission, language: 'zh' | 'en'): string {
+  switch (permission) {
+    case 'network_access':
+      return language === 'zh' ? '网络访问' : 'Network';
+    case 'command_execution':
+      return language === 'zh' ? '命令执行' : 'Exec';
+    case 'package_installation':
+      return language === 'zh' ? '安装依赖' : 'Packages';
+    case 'file_system_write':
+      return language === 'zh' ? '文件系统写入' : 'Filesystem';
+    case 'secret_material':
+      return language === 'zh' ? '敏感内容' : 'Secrets';
+    default:
+      return permission;
   }
 }
 
@@ -77,7 +97,27 @@ function reportRiskMeta(report: SkillSecurityReport, t: (key: I18nKey) => string
   return { label: t('agents_risk_low'), color: '#34D399' };
 }
 
-function formatCreateAgentError(errorMessage: string | undefined, t: (key: I18nKey) => string): string {
+function formatCreateAgentError(
+  errorMessage: string | undefined,
+  errorCode: AppErrorCode | undefined,
+  t: (key: I18nKey) => string,
+): string {
+  if (errorCode === APP_ERROR_CODES.AUTH_EXPIRED || errorCode === APP_ERROR_CODES.AUTH_FORBIDDEN) {
+    return t('agents_error_create_failed_permission');
+  }
+
+  if (errorCode === APP_ERROR_CODES.GATEWAY_PAIRING_REQUIRED || errorCode === APP_ERROR_CODES.GATEWAY_DEVICE_IDENTITY_REQUIRED) {
+    return t('agents_error_create_failed_pairing');
+  }
+
+  if (errorCode === APP_ERROR_CODES.REQUEST_INVALID || errorCode === APP_ERROR_CODES.RESPONSE_SCHEMA_INVALID) {
+    return t('agents_error_create_failed_schema');
+  }
+
+  if (errorCode === APP_ERROR_CODES.GATEWAY_ORIGIN_NOT_ALLOWED) {
+    return t('agents_error_create_failed_origin');
+  }
+
   const normalized = (errorMessage ?? '').toLowerCase();
 
   if (
@@ -145,7 +185,7 @@ function AgentCard(props: {
   onKill: (agentId: string) => void;
   onLogs: (agentId: string) => void;
 }): JSX.Element {
-  const { t } = useI18n();
+  const { t, language } = useI18n();
   const color = statusColor(props.item.status);
   const isEnabled = props.item.status !== 'disabled';
 
@@ -219,7 +259,7 @@ function CreateAgentModal(props: {
   onClose: () => void;
   onSubmit: () => void;
 }): JSX.Element {
-  const { t } = useI18n();
+  const { t, language } = useI18n();
 
   return (
     <Modal visible={props.visible} animationType="slide" transparent onRequestClose={props.onClose}>
@@ -293,7 +333,7 @@ function SecurityReportModal(props: {
   onApprove: () => void;
   onInstall: () => void;
 }): JSX.Element {
-  const { t } = useI18n();
+  const { t, language } = useI18n();
   const riskMeta = props.report ? reportRiskMeta(props.report, t) : null;
   const approveLabel = props.report
     ? props.report.scan.critical > 0
@@ -339,6 +379,15 @@ function SecurityReportModal(props: {
               <Text style={styles.reportSummaryText}>
                 {t('agents_security_blocked_refs')}: {props.report.sourceSummary.blockedReferences.length}
               </Text>
+              {props.report.scan.permissions.length > 0 && (
+                <View style={styles.permissionSummary}>
+                  {props.report.scan.permissions.map((permission) => (
+                    <View key={permission} style={styles.permissionChip}>
+                      <Text style={styles.permissionChipText}>{permissionLabel(permission, language)}</Text>
+                    </View>
+                  ))}
+                </View>
+              )}
               <Text style={styles.reportSummaryText}>
                 {t('agents_security_generated_at')}: {new Date(props.report.generatedAt).toLocaleString()}
               </Text>
@@ -423,7 +472,8 @@ function SecurityReportModal(props: {
 }
 
 export function AgentsScreen(): JSX.Element {
-  const { t } = useI18n();
+  const { t, language } = useI18n();
+  const featureOverrides = useAppPreferencesStore((state) => state.featureOverrides);
   const [activePane, setActivePane] = useState<'agents' | 'skills'>('agents');
   const [skillInput, setSkillInput] = useState('');
   const [createModalVisible, setCreateModalVisible] = useState(false);
@@ -440,6 +490,7 @@ export function AgentsScreen(): JSX.Element {
     error,
     selectedAgentId,
     selectedAgentLogs,
+    logsHasMore,
     logsLoading,
     refresh,
     createOneAgent,
@@ -447,7 +498,12 @@ export function AgentsScreen(): JSX.Element {
     restartOneAgent,
     killOneAgent,
     loadAgentLogs,
+    loadMoreAgentLogs,
   } = useAgentsControl();
+  const agentLogPaginationEnabled = useMemo(
+    () => isExperimentalFeatureEnabled('agentLogsPagination', featureOverrides),
+    [featureOverrides],
+  );
 
   const {
     skills,
@@ -526,7 +582,10 @@ export function AgentsScreen(): JSX.Element {
       });
 
       if (!result.ok) {
-        Alert.alert(t('agents_error_create_failed_title'), formatCreateAgentError(result.error, t));
+        Alert.alert(
+          t('agents_error_create_failed_title'),
+          formatCreateAgentError(result.error, result.errorCode, t),
+        );
         return;
       }
 
@@ -655,6 +714,18 @@ export function AgentsScreen(): JSX.Element {
                       ))
                     )}
                   </ScrollView>
+                )}
+                {agentLogPaginationEnabled && logsHasMore && !logsLoading && (
+                  <Pressable
+                    style={styles.logsLoadMoreButton}
+                    onPress={() => {
+                      void loadMoreAgentLogs();
+                    }}
+                  >
+                    <Text style={styles.logsLoadMoreText}>
+                      {language === 'zh' ? '再加载 100 条更早日志' : 'Load 100 older logs'}
+                    </Text>
+                  </Pressable>
                 )}
               </View>
             }
@@ -837,11 +908,25 @@ export function AgentsScreen(): JSX.Element {
               {selectedAgentLogs.length === 0 ? (
                 <Text style={styles.logTextMuted}>{t('agents_logs_hint')}</Text>
               ) : (
-                selectedAgentLogs.map((line, index) => (
-                  <Text key={`${index}:${line}`} style={styles.logText}>
-                    {line}
-                  </Text>
-                ))
+                <>
+                  {selectedAgentLogs.map((line, index) => (
+                    <Text key={`${index}:${line}`} style={styles.logText}>
+                      {line}
+                    </Text>
+                  ))}
+                  {agentLogPaginationEnabled && logsHasMore && (
+                    <Pressable
+                      style={styles.logsLoadMoreButton}
+                      onPress={() => {
+                        void loadMoreAgentLogs();
+                      }}
+                    >
+                      <Text style={styles.logsLoadMoreText}>
+                        {language === 'zh' ? '再加载 100 条更早日志' : 'Load 100 older logs'}
+                      </Text>
+                    </Pressable>
+                  )}
+                </>
               )}
             </ScrollView>
           )}
@@ -1132,6 +1217,20 @@ const styles = createAdaptiveStyles({
     gap: 4,
     paddingBottom: 8,
   },
+  logsLoadMoreButton: {
+    marginTop: 10,
+    alignSelf: 'flex-start',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#1D4ED8',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  logsLoadMoreText: {
+    color: '#93C5FD',
+    fontSize: 12,
+    fontWeight: '700',
+  },
   logsModalScreen: {
     flex: 1,
     backgroundColor: '#020617',
@@ -1386,6 +1485,25 @@ const styles = createAdaptiveStyles({
   reportSummaryText: {
     color: '#94A3B8',
     fontSize: 12,
+  },
+  permissionSummary: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 4,
+  },
+  permissionChip: {
+    borderWidth: 1,
+    borderColor: '#264653',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    backgroundColor: '#16313A',
+  },
+  permissionChipText: {
+    color: '#CAFFF5',
+    fontSize: 11,
+    fontWeight: '700',
   },
   reportTargetsPanel: {
     marginTop: 10,

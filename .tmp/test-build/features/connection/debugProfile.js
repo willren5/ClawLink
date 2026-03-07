@@ -5,6 +5,7 @@ exports.createHiddenDebugProfile = createHiddenDebugProfile;
 exports.isHiddenDebugProfile = isHiddenDebugProfile;
 exports.getVisibleGatewayProfiles = getVisibleGatewayProfiles;
 exports.ensureHiddenDebugProfile = ensureHiddenDebugProfile;
+const featureFlags_1 = require("../../lib/features/featureFlags");
 exports.HIDDEN_DEBUG_PROFILE_ID = 'gw_hidden_debug_user';
 exports.HIDDEN_DEBUG_PROFILE_NAME = '__hidden_debug_user__';
 exports.HIDDEN_DEBUG_IP = '999.999.999.999';
@@ -30,6 +31,9 @@ function getVisibleGatewayProfiles(profiles) {
     return profiles.filter((profile) => !isHiddenDebugProfile(profile));
 }
 function ensureHiddenDebugProfile(profiles) {
+    if (!(0, featureFlags_1.isHiddenDebugProfileEnabled)()) {
+        return profiles.filter((profile) => !isHiddenDebugProfile(profile));
+    }
     const now = Date.now();
     const normalized = profiles.map((profile) => {
         if (!isHiddenDebugProfile(profile)) {

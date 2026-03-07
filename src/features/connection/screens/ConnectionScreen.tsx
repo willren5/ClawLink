@@ -13,13 +13,16 @@ import {
 import * as Haptics from 'expo-haptics';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 
+import { APP_ERROR_CODES, getAppErrorCode } from '../../../lib/errors/appError';
 import { parseGatewayEndpointInput, parsePort } from '../../../lib/utils/network';
 import { LiquidGlassPanel } from '../../../components/LiquidGlassPanel';
 import { createAdaptiveStyles, mapColorForMode, useThemeMode } from '../../../theme/adaptiveStyles';
 import { useConnectionStore } from '../store/connectionStore';
-import { getVisibleGatewayProfiles } from '../debugProfile';
+import { getVisibleGatewayProfiles, HIDDEN_DEBUG_TOKEN } from '../debugProfile';
 import { useI18n } from '../../../lib/i18n';
 import { parseGatewayImport, type ImportedGatewayConfig } from '../services/connectionImport';
+
+const PROMO_DEMO_ENABLED = __DEV__ && process.env.EXPO_PUBLIC_PROMO_DEMO === '1';
 
 function formatConnectionErrorMessage(error: unknown, language: 'zh' | 'en'): string {
   const localized = (zh: string, en: string): string => (language === 'zh' ? zh : en);
@@ -31,7 +34,64 @@ function formatConnectionErrorMessage(error: unknown, language: 'zh' | 'en'): st
     );
   }
 
+  const errorCode = getAppErrorCode(error);
   const message = error.message;
+
+  if (message.toLowerCase().includes('will not retry over insecure http automatically')) {
+    return localized(
+      'HTTPS 连接失败。为了避免把 Token 自动降级发送到不安全的 HTTP，ClawLink 不会自动回退到 HTTP。请确认网关协议后手动重试。',
+      'HTTPS connection failed. To avoid resending your token over insecure HTTP, ClawLink will not auto-fallback to HTTP. Verify the gateway protocol and retry explicitly.',
+    );
+  }
+
+  if (errorCode === APP_ERROR_CODES.AUTH_EXPIRED || errorCode === APP_ERROR_CODES.AUTH_FORBIDDEN) {
+    return localized(
+      'Token 无效或已过期，请在 OpenClaw Gateway 重新复制 Token。',
+      'Token is invalid or expired. Please copy a fresh token from OpenClaw Gateway.',
+    );
+  }
+
+  if (errorCode === APP_ERROR_CODES.GATEWAY_ENDPOINT_NOT_FOUND) {
+    return localized(
+      '未找到网关接口，请检查地址、端口和 HTTPS 开关是否正确。',
+      'Gateway endpoint not found. Please verify host, port, and HTTPS toggle.',
+    );
+  }
+
+  if (errorCode === APP_ERROR_CODES.GATEWAY_ORIGIN_NOT_ALLOWED) {
+    return localized(
+      '网关拒绝了当前客户端来源。请在网关配置里允许该来源，或切换 iOS 客户端模式后重试。',
+      'Gateway rejected current client origin. Allow this origin in gateway config or retry with iOS client mode.',
+    );
+  }
+
+  if (errorCode === APP_ERROR_CODES.GATEWAY_PAIRING_REQUIRED) {
+    return localized(
+      '当前设备需要在网关主机上先完成配对授权。',
+      'This device must be approved by pairing on the gateway host first.',
+    );
+  }
+
+  if (errorCode === APP_ERROR_CODES.GATEWAY_DEVICE_IDENTITY_REQUIRED) {
+    return localized(
+      '网关要求设备身份校验。请在网关端允许移动端接入后再连接。',
+      'Gateway requires device identity verification. Allow mobile device access on gateway first.',
+    );
+  }
+
+  if (errorCode === APP_ERROR_CODES.GATEWAY_UNREACHABLE) {
+    return localized(
+      '无法连接到网关。请检查：1) 网关已启动；2) 使用同一局域网；3) 未开启会劫持局域网的 VPN/代理；4) 网关绑定为 LAN（openclaw config set gateway.bind lan）。',
+      'Cannot reach gateway. Check: 1) gateway is running; 2) same LAN/Wi-Fi; 3) VPN/proxy is not hijacking LAN traffic; 4) gateway bind is LAN (openclaw config set gateway.bind lan).',
+    );
+  }
+
+  if (errorCode === APP_ERROR_CODES.TIMEOUT) {
+    return localized(
+      '连接超时，请检查网关是否在线，或稍后重试。',
+      'Connection timed out. Check gateway status and retry later.',
+    );
+  }
 
   if (message.includes('HTTP 401') || message.includes('HTTP 403')) {
     return localized(
@@ -111,7 +171,6 @@ export function ConnectionScreen(): JSX.Element {
   const params = useLocalSearchParams<{
     host?: string;
     port?: string;
-    token?: string;
     tls?: string;
     name?: string;
     importPayload?: string;
@@ -129,10 +188,11 @@ export function ConnectionScreen(): JSX.Element {
   const [formError, setFormError] = useState<string | null>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [showHelpPanel, setShowHelpPanel] = useState(false);
-  const [showImportPanel, setShowImportPanel] = useState(false);
+  const [showImportPanel, setShowImportPanel] = useState(true);
   const [importPayload, setImportPayload] = useState('');
   const [importFeedback, setImportFeedback] = useState<string | null>(null);
   const lastAppliedRouteImportRef = useRef<string | null>(null);
+  const promoDemoAttemptedRef = useRef(false);
 
   const bootstrapCommand = useMemo(
     () =>
@@ -231,6 +291,7 @@ printf "Gateway Host: %s\\nPort: %s\\nAPI Token: %s\\n" "$HOST" "$PORT" "$TOKEN"
     const previewPort = parsedEndpoint.port ?? (Number.isFinite(parsedInputPort) ? parsedInputPort : 18789);
     return `${protocol}://${parsedEndpoint.host}:${previewPort}`;
   }, [parsedEndpoint.host, parsedEndpoint.port, parsedEndpoint.tls, port, useTls]);
+  const secureTransportEnabled = (parsedEndpoint.tls ?? useTls) === true;
 
   const applyImportedConfig = useCallback(
     async (config: ImportedGatewayConfig): Promise<void> => {
@@ -251,6 +312,7 @@ printf "Gateway Host: %s\\nPort: %s\\nAPI Token: %s\\n" "$HOST" "$PORT" "$TOKEN"
       }
 
       setShowAdvanced(Boolean(config.name || typeof config.port === 'number' || typeof config.tls === 'boolean'));
+      setShowImportPanel(true);
       setFormError(null);
       setImportFeedback(
         language === 'zh'
@@ -266,11 +328,10 @@ printf "Gateway Host: %s\\nPort: %s\\nAPI Token: %s\\n" "$HOST" "$PORT" "$TOKEN"
     const rawImport =
       typeof params.importPayload === 'string'
         ? params.importPayload
-        : typeof params.host === 'string' || typeof params.token === 'string'
+        : typeof params.host === 'string'
           ? JSON.stringify({
               host: typeof params.host === 'string' ? params.host : '',
               port: typeof params.port === 'string' ? params.port : undefined,
-              token: typeof params.token === 'string' ? params.token : undefined,
               tls: typeof params.tls === 'string' ? params.tls : undefined,
               name: typeof params.name === 'string' ? params.name : undefined,
             })
@@ -287,16 +348,54 @@ printf "Gateway Host: %s\\nPort: %s\\nAPI Token: %s\\n" "$HOST" "$PORT" "$TOKEN"
 
     lastAppliedRouteImportRef.current = rawImport;
     void applyImportedConfig(imported);
-  }, [applyImportedConfig, params.host, params.importPayload, params.name, params.port, params.tls, params.token]);
+  }, [applyImportedConfig, params.host, params.importPayload, params.name, params.port, params.tls]);
+
+  useEffect(() => {
+    if (
+      !PROMO_DEMO_ENABLED ||
+      promoDemoAttemptedRef.current ||
+      visibleProfileCount > 0 ||
+      connectionStatus === 'connecting'
+    ) {
+      return;
+    }
+
+    promoDemoAttemptedRef.current = true;
+    const demoInput = {
+      host: '127.0.0.1',
+      port: 18789,
+      token: HIDDEN_DEBUG_TOKEN,
+      tls: false,
+      name: 'Promo Demo Gateway',
+    };
+
+    setHost(demoInput.host);
+    setPort(String(demoInput.port));
+    setToken(demoInput.token);
+    setProfileName(demoInput.name);
+    setUseTls(demoInput.tls);
+    setFormError(null);
+    setImportFeedback(language === 'zh' ? '正在连接本地 Demo Gateway…' : 'Connecting to local demo gateway...');
+
+    // Dev-only shortcut for simulator promo capture.
+    void connectAndSaveProfile(demoInput)
+      .then(() => {
+        router.replace('/(tabs)/dashboard');
+      })
+      .catch((error: unknown) => {
+        setImportFeedback(null);
+        setFormError(formatConnectionErrorMessage(error, language));
+      });
+  }, [connectAndSaveProfile, connectionStatus, language, router, visibleProfileCount]);
 
   const handleImportPayload = async (): Promise<void> => {
     setImportFeedback(null);
     const imported = parseGatewayImport(importPayload);
-    if (!imported || (!imported.host && !imported.token)) {
+    if (!imported || !imported.host) {
       setImportFeedback(
         language === 'zh'
-          ? '没有识别到可导入的 Host / Port / Token。请粘贴终端输出、连接链接或 JSON。'
-          : 'No importable host, port, or token was detected. Paste terminal output, a connection link, or JSON.',
+          ? '没有识别到可导入的 Host / Port。请粘贴终端输出、连接链接或 JSON。'
+          : 'No importable host or port was detected. Paste terminal output, a connection link, or JSON.',
       );
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
       return;
@@ -383,8 +482,8 @@ printf "Gateway Host: %s\\nPort: %s\\nAPI Token: %s\\n" "$HOST" "$PORT" "$TOKEN"
               <Text style={styles.importTitle}>{language === 'zh' ? '智能导入' : 'Smart Import'}</Text>
               <Text style={styles.importHint}>
                 {language === 'zh'
-                  ? '支持粘贴网关主机终端输出、clawlink://connect 链接或 JSON。'
-                  : 'Paste gateway terminal output, a clawlink://connect link, or JSON to fill the form.'}
+                  ? '支持粘贴网关主机终端输出、另一台设备分享的连接包、clawlink://connect 链接或 JSON。'
+                  : 'Paste gateway terminal output, a shared connection bundle, a clawlink://connect link, or JSON to fill the form.'}
               </Text>
             </View>
             <Pressable
@@ -416,6 +515,11 @@ printf "Gateway Host: %s\\nPort: %s\\nAPI Token: %s\\n" "$HOST" "$PORT" "$TOKEN"
                 style={styles.importInput}
               />
               {!!importFeedback && <Text style={styles.importFeedback}>{importFeedback}</Text>}
+              <Text style={styles.importHintText}>
+                {language === 'zh'
+                  ? '小技巧：另一台设备分享过来的文本，直接整段粘贴到这里即可自动识别 Host / Port / TLS / Token。'
+                  : 'Tip: if another device shared a setup bundle, paste the whole block here and ClawLink will extract host, port, TLS, and token automatically.'}
+              </Text>
               <Pressable
                 style={styles.importButton}
                 onPress={() => {
@@ -529,6 +633,19 @@ printf "Gateway Host: %s\\nPort: %s\\nAPI Token: %s\\n" "$HOST" "$PORT" "$TOKEN"
             <LiquidGlassPanel style={styles.previewBox}>
               <Text style={styles.previewLabel}>{t('connection_preview_label')}</Text>
               <Text style={styles.previewValue}>{baseUrlPreview}</Text>
+            </LiquidGlassPanel>
+          )}
+
+          {secureTransportEnabled && (
+            <LiquidGlassPanel style={styles.securityNoticeBox}>
+              <Text style={styles.securityNoticeTitle}>
+                {language === 'zh' ? 'HTTPS 安全策略' : 'HTTPS Safety Policy'}
+              </Text>
+              <Text style={styles.securityNoticeText}>
+                {language === 'zh'
+                  ? '当你选择 HTTPS 时，ClawLink 不会为了“试试看”自动回退到 HTTP，避免把 Token 降级发送到明文链路。'
+                  : 'When HTTPS is selected, ClawLink will not automatically fall back to HTTP just to test connectivity, which avoids downgrading your token onto a plaintext link.'}
+              </Text>
             </LiquidGlassPanel>
           )}
 
@@ -780,6 +897,11 @@ const styles = createAdaptiveStyles({
     fontSize: 13,
     lineHeight: 19,
   },
+  importHintText: {
+    color: '#94A3B8',
+    fontSize: 12,
+    lineHeight: 18,
+  },
   importButton: {
     minHeight: 48,
     borderRadius: 12,
@@ -951,6 +1073,24 @@ const styles = createAdaptiveStyles({
   previewValue: {
     color: '#DBEAFE',
     fontSize: 15,
+  },
+  securityNoticeBox: {
+    borderRadius: 12,
+    padding: 12,
+    gap: 6,
+    borderWidth: 1,
+    borderColor: '#0F766E',
+    backgroundColor: 'rgba(6, 78, 59, 0.22)',
+  },
+  securityNoticeTitle: {
+    color: '#99F6E4',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  securityNoticeText: {
+    color: '#CCFBF1',
+    fontSize: 13,
+    lineHeight: 20,
   },
   errorText: {
     color: '#FCA5A5',

@@ -22,6 +22,7 @@ import { useGatewayLogsStream } from '../hooks/useGatewayLogsStream';
 import { useHostMetricsStream } from '../hooks/useHostMetricsStream';
 import type { GatewayLogEntry } from '../types';
 import { useI18n } from '../../../lib/i18n';
+import { useAgentsRuntimeStore } from '../../agents/store/agentsRuntimeStore';
 
 const SPARKLINE_HEIGHT = 156;
 
@@ -114,10 +115,11 @@ export function MonitorScreen(): JSX.Element {
   const isFocused = useIsFocused();
   const insets = useSafeAreaInsets();
   const themeMode = useThemeMode();
-  const { t } = useI18n();
+  const { t, language } = useI18n();
   const probePort = useMonitorSettingsStore((state) => state.probePort);
   const setProbePort = useMonitorSettingsStore((state) => state.setProbePort);
   const appendAuditEntry = useAuditLogStore((state) => state.appendEntry);
+  const runtimeAgentsById = useAgentsRuntimeStore((state) => state.byId);
 
   const { logs, connected, paused, togglePaused, clearLogs } = useGatewayLogsStream(isFocused);
   const {
@@ -135,19 +137,36 @@ export function MonitorScreen(): JSX.Element {
     useHostMetricsStream(probePort, isFocused);
 
   const [query, setQuery] = useState('');
+  const [logLevelFilter, setLogLevelFilter] = useState<'all' | GatewayLogEntry['level']>('all');
   const [probePortInput, setProbePortInput] = useState(String(probePort));
   const [killAgentId, setKillAgentId] = useState('');
   const listRef = useRef<ScrollView>(null);
 
   const filteredLogs = useMemo(() => {
     const normalized = query.trim().toLowerCase();
-    if (!normalized) {
-      return logs;
-    }
+    return logs.filter((item) => {
+      if (logLevelFilter !== 'all' && item.level !== logLevelFilter) {
+        return false;
+      }
 
-    return logs.filter((item) => item.message.toLowerCase().includes(normalized));
-  }, [logs, query]);
-  const visibleLogs = useMemo(() => filteredLogs.slice(-220), [filteredLogs]);
+      if (!normalized) {
+        return true;
+      }
+
+      return item.message.toLowerCase().includes(normalized);
+    });
+  }, [logLevelFilter, logs, query]);
+  const visibleLogs = useMemo(() => filteredLogs.slice(-400), [filteredLogs]);
+  const logFilters = useMemo(
+    () => [
+      { id: 'all' as const, label: language === 'zh' ? '全部' : 'All' },
+      { id: 'ERROR' as const, label: 'ERROR' },
+      { id: 'WARN' as const, label: 'WARN' },
+      { id: 'INFO' as const, label: 'INFO' },
+    ],
+    [language],
+  );
+  const runtimeAgents = useMemo(() => Object.values(runtimeAgentsById), [runtimeAgentsById]);
 
   const netUpSeries = useMemo(() => netHistory.map((value) => value.up), [netHistory]);
   const netDownSeries = useMemo(() => netHistory.map((value) => value.down), [netHistory]);
@@ -296,6 +315,23 @@ export function MonitorScreen(): JSX.Element {
           </Pressable>
         </View>
 
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.logFilterRow}>
+          {logFilters.map((item) => {
+            const selected = logLevelFilter === item.id;
+            return (
+              <Pressable
+                key={item.id}
+                style={[styles.logFilterChip, selected && styles.logFilterChipSelected]}
+                onPress={() => {
+                  setLogLevelFilter(item.id);
+                }}
+              >
+                <Text style={[styles.logFilterChipText, selected && styles.logFilterChipTextSelected]}>{item.label}</Text>
+              </Pressable>
+            );
+          })}
+        </ScrollView>
+
         <ScrollView
           ref={listRef}
           style={styles.logsList}
@@ -440,6 +476,27 @@ export function MonitorScreen(): JSX.Element {
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>{t('monitor_emergency_title')}</Text>
 
+        {runtimeAgents.length > 0 && (
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.agentPickerRow}>
+            {runtimeAgents.map((agent) => {
+              const selected = killAgentId === agent.id;
+              return (
+                <Pressable
+                  key={agent.id}
+                  style={[styles.agentPickerChip, selected && styles.agentPickerChipSelected]}
+                  onPress={() => {
+                    setKillAgentId(agent.id);
+                  }}
+                >
+                  <Text style={[styles.agentPickerChipText, selected && styles.agentPickerChipTextSelected]}>
+                    {agent.name}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+        )}
+
         <View style={styles.killRow}>
           <TextInput
             value={killAgentId}
@@ -543,6 +600,32 @@ const styles = createAdaptiveStyles({
   controlsRow: {
     flexDirection: 'row',
     gap: 8,
+  },
+  logFilterRow: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  logFilterChip: {
+    minHeight: 30,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#334155',
+    backgroundColor: '#0F172A',
+    paddingHorizontal: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  logFilterChipSelected: {
+    borderColor: '#2563EB',
+    backgroundColor: '#13233C',
+  },
+  logFilterChipText: {
+    color: '#CBD5E1',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  logFilterChipTextSelected: {
+    color: '#93C5FD',
   },
   input: {
     flex: 1,
@@ -698,6 +781,32 @@ const styles = createAdaptiveStyles({
   metricsGrid: {
     marginTop: 6,
     gap: 4,
+  },
+  agentPickerRow: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  agentPickerChip: {
+    minHeight: 32,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#334155',
+    backgroundColor: '#0F172A',
+    paddingHorizontal: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  agentPickerChipSelected: {
+    borderColor: '#2563EB',
+    backgroundColor: '#13233C',
+  },
+  agentPickerChipText: {
+    color: '#CBD5E1',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  agentPickerChipTextSelected: {
+    color: '#93C5FD',
   },
   killRow: {
     flexDirection: 'row',

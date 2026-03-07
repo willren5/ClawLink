@@ -1,0 +1,381 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=1242, initial-scale=1" />
+    <link rel="stylesheet" href="./shared.css" />
+    <title>ClawLink XHS Pain Hook Cover</title>
+    <style>
+      .cover {
+        background:
+          radial-gradient(circle at 18% 18%, rgba(255, 117, 94, 0.28), transparent 26%),
+          radial-gradient(circle at 82% 16%, rgba(255, 206, 123, 0.24), transparent 22%),
+          linear-gradient(180deg, #12313b 0%, #143843 42%, #183f4b 100%);
+      }
+
+      .noise {
+        background-image:
+          radial-gradient(circle at 20% 16%, rgba(255, 255, 255, 0.08), transparent 28%),
+          radial-gradient(circle at 80% 8%, rgba(255, 115, 93, 0.14), transparent 26%),
+          radial-gradient(circle at 76% 82%, rgba(255, 208, 167, 0.1), transparent 22%);
+      }
+
+      .wrap {
+        position: relative;
+        width: 100%;
+        height: 100%;
+        padding: 50px 44px 40px;
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        position: relative;
+        z-index: 3;
+      }
+
+      .brand-icon {
+        width: 82px;
+        height: 82px;
+        border-radius: 24px;
+        overflow: hidden;
+        box-shadow: 0 16px 34px rgba(0, 0, 0, 0.22);
+      }
+
+      .brand-icon img {
+        width: 100%;
+        height: 100%;
+        display: block;
+        object-fit: cover;
+      }
+
+      .brand-copy strong {
+        display: block;
+        font-size: 34px;
+        font-weight: 950;
+        color: #fff7ef;
+        letter-spacing: -0.04em;
+      }
+
+      .brand-copy span {
+        display: block;
+        margin-top: 6px;
+        font-size: 20px;
+        font-weight: 800;
+        color: rgba(255, 247, 239, 0.72);
+      }
+
+      .badge-row {
+        position: relative;
+        z-index: 3;
+        margin-top: 26px;
+        display: flex;
+        gap: 14px;
+        flex-wrap: wrap;
+      }
+
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        padding: 14px 20px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.1);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        color: #fff7ef;
+        font-size: 22px;
+        font-weight: 900;
+        backdrop-filter: blur(14px);
+      }
+
+      .badge.hot {
+        background: rgba(255, 117, 94, 0.18);
+        border-color: rgba(255, 117, 94, 0.2);
+      }
+
+      .copy {
+        position: relative;
+        z-index: 3;
+        max-width: 730px;
+      }
+
+      .title {
+        margin: 34px 0 0;
+        font-size: 124px;
+        line-height: 0.84;
+        letter-spacing: -0.075em;
+        font-weight: 960;
+        color: #fff8f0;
+      }
+
+      .title .line {
+        display: block;
+        white-space: nowrap;
+      }
+
+      .title .accent {
+        display: inline-flex;
+        align-items: center;
+        padding: 8px 18px 16px;
+        border-radius: 30px;
+        color: #fff9f2;
+        background: linear-gradient(135deg, #ff705e 0%, #ff8d6a 100%);
+        box-shadow: 0 18px 42px rgba(255, 112, 94, 0.22);
+      }
+
+      .sub {
+        margin-top: 28px;
+        max-width: 620px;
+        font-size: 31px;
+        line-height: 1.45;
+        font-weight: 820;
+        color: rgba(255, 247, 239, 0.76);
+      }
+
+      .proof {
+        margin-top: 28px;
+        display: inline-flex;
+        align-items: center;
+        gap: 14px;
+        padding: 18px 24px;
+        border-radius: 28px;
+        background: rgba(255, 255, 255, 0.12);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        color: #fff7ef;
+        font-size: 27px;
+        font-weight: 900;
+        box-shadow: 0 18px 42px rgba(0, 0, 0, 0.14);
+        backdrop-filter: blur(18px);
+      }
+
+      .proof strong {
+        color: #ffc76a;
+      }
+
+      .stage {
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+      }
+
+      .glow {
+        position: absolute;
+        right: -30px;
+        top: 238px;
+        width: 720px;
+        height: 1120px;
+        background: radial-gradient(circle, rgba(255, 183, 116, 0.18), transparent 72%);
+        filter: blur(10px);
+      }
+
+      .phone-main {
+        position: absolute;
+        right: 44px;
+        top: 272px;
+        width: 476px;
+        height: 968px;
+        border-radius: 46px;
+        overflow: hidden;
+        border: 14px solid rgba(255, 255, 255, 0.88);
+        background: rgba(255, 255, 255, 0.88);
+        box-shadow: 0 30px 70px rgba(0, 0, 0, 0.24);
+        transform: rotate(6deg);
+        z-index: 2;
+      }
+
+      .phone-main img {
+        display: block;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+      }
+
+      .card {
+        position: absolute;
+        overflow: hidden;
+        border-radius: 34px;
+        border: 10px solid rgba(255, 255, 255, 0.86);
+        background: rgba(255, 255, 255, 0.88);
+        box-shadow: 0 22px 52px rgba(0, 0, 0, 0.2);
+      }
+
+      .card img {
+        display: block;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+      }
+
+      .card.app-icon {
+        left: 56px;
+        top: 1066px;
+        width: 304px;
+        height: 404px;
+        transform: rotate(-8deg);
+        z-index: 2;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background:
+          radial-gradient(circle at 28% 20%, rgba(255, 209, 160, 0.46), transparent 24%),
+          linear-gradient(180deg, #1a4652 0%, #173b45 100%);
+      }
+
+      .app-icon-shell {
+        width: 214px;
+        height: 214px;
+        border-radius: 58px;
+        overflow: hidden;
+        box-shadow: 0 28px 52px rgba(0, 0, 0, 0.26);
+      }
+
+      .app-icon-shell img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+      }
+
+      .app-icon-label {
+        position: absolute;
+        left: 24px;
+        right: 24px;
+        bottom: 28px;
+        text-align: center;
+      }
+
+      .app-icon-label strong {
+        display: block;
+        font-size: 32px;
+        line-height: 1;
+        font-weight: 950;
+        color: #fff8f0;
+      }
+
+      .app-icon-label span {
+        display: block;
+        margin-top: 10px;
+        font-size: 18px;
+        line-height: 1.2;
+        font-weight: 850;
+        color: rgba(255, 248, 240, 0.74);
+      }
+
+      .card.monitor {
+        left: 318px;
+        top: 1138px;
+        width: 318px;
+        height: 350px;
+        transform: rotate(-2deg);
+        z-index: 3;
+      }
+
+      .card.chat {
+        right: 92px;
+        bottom: 72px;
+        width: 470px;
+        height: 256px;
+        transform: rotate(-2deg);
+        z-index: 4;
+      }
+
+      .footer {
+        position: absolute;
+        left: 44px;
+        right: 44px;
+        bottom: 30px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        z-index: 6;
+      }
+
+      .footer-note {
+        font-size: 20px;
+        font-weight: 850;
+        color: rgba(255, 247, 239, 0.46);
+      }
+
+      .footer-note strong {
+        color: #fff7ef;
+      }
+
+      .footer-tag {
+        display: inline-flex;
+        align-items: center;
+        padding: 12px 18px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.12);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        color: #fff7ef;
+        font-size: 19px;
+        font-weight: 900;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="poster cover">
+      <div class="noise"></div>
+      <div class="wrap">
+        <section class="copy">
+          <div class="brand">
+            <div class="brand-icon"><img src="../../../assets/icon.png" alt="ClawLink app icon" /></div>
+            <div class="brand-copy">
+              <strong>ClawLink</strong>
+              <span>OpenClaw Gateway Remote</span>
+            </div>
+          </div>
+
+          <div class="badge-row">
+            <div class="badge hot">OpenClaw</div>
+            <div class="badge">iPhone 遥控端</div>
+            <div class="badge">Agent 救火</div>
+          </div>
+
+          <h1 class="title">
+            <span class="line">OpenClaw挂了</span>
+            <span class="line">躺在床上</span>
+            <span class="line"><span class="accent">用手机救火</span></span>
+          </h1>
+
+          <div class="proof">看小组件里 <strong>每天花了多少 token</strong></div>
+
+          <div class="sub">
+            先看状态和今天烧了多少 token。<br />
+            发现异常，再切 Agent、盯日志、继续处理。
+          </div>
+        </section>
+
+        <section class="stage">
+          <div class="glow"></div>
+
+          <div class="phone phone-main">
+            <img src="../dashboard.png" alt="ClawLink dashboard screenshot" />
+          </div>
+
+          <div class="card app-icon">
+            <div class="app-icon-shell">
+              <img src="../../../assets/icon.png" alt="ClawLink app icon" />
+            </div>
+            <div class="app-icon-label">
+              <strong>ClawLink</strong>
+              <span>OpenClaw Gateway Remote</span>
+            </div>
+          </div>
+
+          <div class="card monitor">
+            <img src="../monitor.png" alt="ClawLink monitor screenshot" />
+          </div>
+
+          <div class="card chat">
+            <img src="../chat.png" alt="ClawLink chat screenshot" />
+          </div>
+        </section>
+
+        <div class="footer">
+          <div class="footer-note">给 <strong>OpenClaw</strong> 做的 iOS 遥控器，不是“出事提醒器”。</div>
+          <div class="footer-tag">真实产品截图</div>
+        </div>
+      </div>
+    </main>
+  </body>
+</html>
